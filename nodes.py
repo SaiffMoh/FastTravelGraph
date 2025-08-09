@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Any
 from langchain_openai import ChatOpenAI
 from langchain.schema import HumanMessage, SystemMessage
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from models import FlightSearchState
 from validators import validate_extracted_info
@@ -416,7 +417,7 @@ def get_access_token_node(state: FlightSearchState) -> FlightSearchState:
     if DEBUG:
         print("[DEBUG] Amadeus token: connecting…")
     try:
-        response = requests.post(url, headers=headers, data=data)
+        response = requests.post(url, headers=headers, data=data, timeout=10)
         response.raise_for_status()
         token_json = response.json()
         state["access_token"] = token_json.get("access_token")
@@ -431,7 +432,7 @@ def get_access_token_node(state: FlightSearchState) -> FlightSearchState:
     return state
 
 def get_flight_offers_node(state: FlightSearchState) -> FlightSearchState:
-    """Get flight offers from Amadeus API for a 7-day window (input date + 6 days)."""
+    """Get flight offers from Amadeus API for a 7-day window (input date + 6 days) in parallel."""
     base_url = "https://test.api.amadeus.com/v2/shopping/flight-offers"
     headers = {
         "Authorization": f"Bearer {state['access_token']}",
@@ -454,33 +455,41 @@ def get_flight_offers_node(state: FlightSearchState) -> FlightSearchState:
     if DEBUG:
         print("[DEBUG] Amadeus flight-offers: connecting…")
 
-    all_results = []
+    # Prepare 7 request bodies
+    bodies = []
     for day_offset in range(0, 7):
         query_date = (start_date + timedelta(days=day_offset)).strftime("%Y-%m-%d")
         body = dict(state["body"]) if state.get("body") else {}
-        # Update departure date and round-trip return automatically based on duration
         if body.get("originDestinations"):
             body["originDestinations"][0]["departureDateTimeRange"]["date"] = query_date
             if len(body["originDestinations"]) > 1 and state.get("duration") is not None:
-                # recompute return date from the new query_date
                 dep_date_dt = datetime.strptime(query_date, "%Y-%m-%d")
                 return_date = (dep_date_dt + timedelta(days=int(state.get("duration", 0)))).strftime("%Y-%m-%d")
                 body["originDestinations"][1]["departureDateTimeRange"]["date"] = return_date
-        # Ensure 5 offers
         body.setdefault("searchCriteria", {}).setdefault("maxFlightOffers", 5)
+        bodies.append((query_date, body))
 
+    all_results = []
+
+    def fetch_for_day(day_body_tuple):
+        day, body = day_body_tuple
         try:
-            response = requests.post(base_url, headers=headers, json=body)
-            response.raise_for_status()
-            data = response.json()
+            resp = requests.post(base_url, headers=headers, json=body, timeout=12)
+            resp.raise_for_status()
+            data = resp.json()
             flights = data.get("data", []) or []
-            # Annotate each with search_date and keep at most 5
             for f in flights[:5]:
-                f["_search_date"] = query_date
-            all_results.extend(flights[:5])
-        except Exception as e:
-            print(f"Error getting flight offers for {query_date}: {e}")
-            continue
+                f["_search_date"] = day
+            return flights[:5]
+        except Exception as exc:
+            print(f"Error getting flight offers for {day}: {exc}")
+            return []
+
+    # Fetch in parallel
+    with ThreadPoolExecutor(max_workers=7) as executor:
+        futures = [executor.submit(fetch_for_day, b) for b in bodies]
+        for fut in as_completed(futures):
+            all_results.extend(fut.result())
 
     state["result"] = {"data": all_results}
     state["current_node"] = "search_flights"
