@@ -13,7 +13,15 @@ HEALTH_URL = f"{BASE_URL}/health"
 
 def pick_reply(question: str) -> str:
     q = (question or "").lower()
-    if "one way" in q or "round" in q and "trip" in q:
+    # Cities first to avoid matching "depart" in "departure city"
+    if "departure city" in q or "destination city" in q or ("origin" in q and "destination" in q):
+        return "Cairo to Dubai"
+    if "which city are you flying from" in q:
+        return "Cairo"
+    if "which city are you flying to" in q:
+        return "Dubai"
+
+    if "one way" in q or ("round" in q and "trip" in q):
         return "round trip"
     if "cabin" in q or "economy" in q or "business" in q or "first" in q:
         return "economy"
@@ -21,10 +29,7 @@ def pick_reply(question: str) -> str:
         return "5 days"
     if "date" in q or "depart" in q:
         return "2025-12-20"
-    if "which city are you flying from" in q or "from" in q:
-        return "Cairo"
-    if "which city are you flying to" in q or "to" in q:
-        return "Dubai"
+
     return "Cairo to Dubai, 2025-12-20, round trip, 5 days, economy."
 
 
@@ -64,9 +69,11 @@ def main():
         rtype = data.get("response_type")
         print(f"\nStep {step} -> response_type={rtype}")
 
-        # Assistant message
         assistant_message = data.get("message", "")
         print("Assistant:", assistant_message)
+
+        # Persist the turn so server is stateful across requests
+        conversation_history.append({"role": "user", "content": user_message})
         conversation_history.append({"role": "assistant", "content": assistant_message})
 
         if rtype == "results":
@@ -81,7 +88,6 @@ def main():
         # Otherwise, answer the follow-up
         user_message = pick_reply(assistant_message)
         print("User:", user_message)
-        conversation_history.append({"role": "user", "content": user_message})
         time.sleep(0.3)
 
     print("Reached step limit without results. Check API keys and server logs.")
