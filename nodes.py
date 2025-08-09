@@ -12,6 +12,19 @@ from validators import validate_extracted_info
 from dotenv import load_dotenv
 load_dotenv()
 
+# Debug flag
+DEBUG = str(os.getenv("DEBUG", "")).lower() in {"1", "true", "yes"}
+
+def _debug_print(label: str, payload: Any = None):
+    if DEBUG:
+        try:
+            if isinstance(payload, (dict, list)):
+                print(f"[DEBUG] {label}:\n" + json.dumps(payload, indent=2, ensure_ascii=False))
+            else:
+                print(f"[DEBUG] {label}: {payload}")
+        except Exception:
+            print(f"[DEBUG] {label} (unprintable payload)")
+
 # Lazy LLM initialization to avoid import-time key errors
 _llm = None
 
@@ -380,6 +393,8 @@ def format_body_node(state: FlightSearchState) -> FlightSearchState:
         trip_type=state.get("normalized_trip_type", "one_way"),
         duration=state.get("duration")
     )
+
+    _debug_print("Amadeus request body (flight-offers)", state.get("body"))
     
     state["current_node"] = "format_body"
     return state
@@ -393,12 +408,16 @@ def get_access_token_node(state: FlightSearchState) -> FlightSearchState:
         "client_id": os.getenv("AMADEUS_CLIENT_ID"),
         "client_secret": os.getenv("AMADEUS_CLIENT_SECRET")
     }
-    
+
+    _debug_print("Amadeus token request URL", url)
     try:
         response = requests.post(url, headers=headers, data=data)
+        _debug_print("Amadeus token response status", response.status_code)
         response.raise_for_status()
-        state["access_token"] = response.json()["access_token"]
+        token_json = response.json()
+        state["access_token"] = token_json.get("access_token")
         state["current_node"] = "get_auth"
+        _debug_print("Amadeus token acquired (masked)", {"access_token_present": bool(state.get("access_token"))})
     except Exception as e:
         print(f"Error getting access token: {e}")
         state["followup_question"] = "Sorry, I had trouble connecting to the flight search service. Please try again later."
@@ -413,14 +432,26 @@ def get_flight_offers_node(state: FlightSearchState) -> FlightSearchState:
         "Authorization": f"Bearer {state['access_token']}",
         "Content-Type": "application/json"
     }
+
+    _debug_print("Amadeus flight-offers URL", url)
+    # Do not print Authorization header content
+    _debug_print("Amadeus headers (redacted)", {k: ("<redacted>" if k.lower()=="authorization" else v) for k, v in headers.items()})
+    _debug_print("Amadeus flight-offers POST body", state.get("body"))
     
     try:
         response = requests.post(url, headers=headers, json=state["body"])
+        _debug_print("Amadeus flight-offers response status", response.status_code)
         response.raise_for_status()
         state["result"] = response.json()
         state["current_node"] = "search_flights"
+        _debug_print("Amadeus full JSON response", state.get("result"))
     except Exception as e:
         print(f"Error getting flight offers: {e}")
+        # Attempt to show error body when available
+        try:
+            _debug_print("Amadeus error body", response.text)
+        except Exception:
+            pass
         state["followup_question"] = "Sorry, I had trouble finding flights for your search. Please check your destinations and dates."
         state["needs_followup"] = True
     
