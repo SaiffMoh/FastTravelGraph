@@ -9,6 +9,7 @@ import requests
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
 CHAT_URL = f"{BASE_URL}/chat"
 HEALTH_URL = f"{BASE_URL}/health"
+CLIENT_TIMEOUT = float(os.getenv("CLIENT_TIMEOUT", "120"))
 
 
 def pick_reply(question: str) -> str:
@@ -47,7 +48,7 @@ def print_flights(flights: List[Dict[str, Any]]):
 def main():
     # Optional: health check
     try:
-        r = requests.get(HEALTH_URL, timeout=5)
+        r = requests.get(HEALTH_URL, timeout=min(CLIENT_TIMEOUT, 10))
         print("Health:", r.json())
     except Exception as e:
         print("Warning: health check failed:", e)
@@ -60,7 +61,7 @@ def main():
             "message": user_message,
             "conversation_history": conversation_history,
         }
-        resp = requests.post(CHAT_URL, json=payload, timeout=60)
+        resp = requests.post(CHAT_URL, json=payload, timeout=CLIENT_TIMEOUT)
         if resp.status_code != 200:
             print("Request failed", resp.status_code, resp.text)
             sys.exit(1)
