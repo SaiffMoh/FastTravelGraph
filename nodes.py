@@ -30,15 +30,33 @@ def get_llm() -> ChatOpenAI:
 
 
 def _extract_info_rule_based(text: str) -> Dict[str, Any]:
-    """Lightweight heuristic extractor for flight info from a single user message."""
+    """Lightweight heuristic extractor for flight info from free-form text."""
     result: Dict[str, Any] = {}
     lower = text.lower()
 
-    # Origin and destination (e.g., "from cairo to dubai")
-    m = re.search(r"from\s+([a-zA-Z\s]+?)\s+to\s+([a-zA-Z\s]+)", lower)
+    # Origin and destination patterns
+    # 1) from X to Y
+    m = re.search(r"\bfrom\s+([a-zA-Z\s]+?)\s+to\s+([a-zA-Z\s]+)\b", lower)
+    if not m:
+        # 2) X to Y (avoid capturing questions like 'your origin and destination')
+        m = re.search(r"\b([a-zA-Z][a-zA-Z\s]+?)\s+to\s+([a-zA-Z][a-zA-Z\s]+)\b", lower)
+        if m and ("origin" in lower or "destination" in lower):
+            # likely the assistant question, not user answer; ignore
+            m = None
+    if not m:
+        # 3) origin X and destination Y
+        m = re.search(r"origin(?:\s+city)?\s*[:=]?\s*([a-zA-Z\s]+?)[,;]?\s*(?:and\s*)?destination(?:\s+city)?\s*[:=]?\s*([a-zA-Z\s]+)\b", lower)
     if m:
         result["origin"] = m.group(1).strip().title()
         result["destination"] = m.group(2).strip().title()
+    else:
+        # 4) capture single-sided mentions
+        m_from = re.search(r"\bfrom\s+([a-zA-Z\s]+)\b", lower)
+        m_to = re.search(r"\bto\s+([a-zA-Z\s]+)\b", lower)
+        if m_from:
+            result["origin"] = m_from.group(1).strip().title()
+        if m_to:
+            result["destination"] = m_to.group(1).strip().title()
 
     # Trip type
     if re.search(r"\bround\b|\breturn\b|\bround\s*trip\b|\broundtrip\b", lower):
@@ -62,12 +80,12 @@ def _extract_info_rule_based(text: str) -> Dict[str, Any]:
         except Exception:
             pass
 
-    # Date: try several simple patterns; validators will normalize
+    # Date patterns; validators will normalize
     date_patterns = [
         r"\b\d{4}-\d{2}-\d{2}\b",            # 2025-12-25
         r"\b\d{1,2}/\d{1,2}/\d{2,4}\b",      # 12/25/2025 or 12/25/25
         r"\b\d{1,2}-\d{1,2}-\d{2,4}\b",      # 12-25-2025
-        r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}(,\s*\d{4})?\b",  # Dec 25, 2025
+        r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}(,\s*\d{4})?\b",
     ]
     for pat in date_patterns:
         dm = re.search(pat, lower)
@@ -106,13 +124,17 @@ def _compose_followup(missing_fields):
 
 def analyze_conversation_node(state: FlightSearchState) -> FlightSearchState:
     """Analyze conversation to extract flight information using heuristics, optionally refined by LLM."""
-    # Build conversation text and prefer current user message for heuristics
+    # Build conversation text and gather user-only history
     conversation_text = "".join(f"{m['role']}: {m['content']}\n" for m in state["conversation"])
     user_text = state.get("current_message", "")
+    user_history = "\n".join(m["content"] for m in state["conversation"] if m.get("role") == "user")
 
     try:
-        # Heuristic extraction first
-        heur = _extract_info_rule_based(user_text)
+        # Heuristic extraction from current message and user history
+        extracted: Dict[str, Any] = {}
+        for src in (user_text, user_history):
+            info = _extract_info_rule_based(src or "")
+            extracted.update({k: v for k, v in info.items() if v})
 
         # Optionally refine with LLM if available
         use_llm = bool(os.getenv("OPENAI_API_KEY"))
@@ -128,12 +150,12 @@ Return only valid JSON.
                 extraction_response = get_llm().invoke([HumanMessage(content=extraction_prompt)])
                 model_info = json.loads(extraction_response.content)
                 if isinstance(model_info, dict):
-                    heur.update({k: v for k, v in model_info.items() if v})
+                    extracted.update({k: v for k, v in model_info.items() if v})
             except Exception:
                 pass
 
         # Validate and update state
-        validated_info, validation_errors = validate_extracted_info(heur)
+        validated_info, validation_errors = validate_extracted_info(extracted)
         for key, value in validated_info.items():
             if value is not None:
                 state[key] = value
