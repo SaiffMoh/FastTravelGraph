@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import json
+import argparse
 from collections import defaultdict
 from typing import List, Dict, Any
 
@@ -10,6 +11,7 @@ import requests
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
 CHAT_URL = f"{BASE_URL}/chat"
 HEALTH_URL = f"{BASE_URL}/health"
+RESET_URL = f"{BASE_URL}/reset"
 CLIENT_TIMEOUT = float(os.getenv("CLIENT_TIMEOUT", "120"))
 
 
@@ -76,7 +78,7 @@ def print_grouped_tables(flights: List[Dict[str, Any]]):
                 print(tab_row(row))
 
 
-def main():
+def run_auto():
     # Optional: health check
     try:
         r = requests.get(HEALTH_URL, timeout=min(CLIENT_TIMEOUT, 10))
@@ -123,6 +125,73 @@ def main():
         time.sleep(0.3)
 
     print("Reached step limit without results. Check API keys and server logs.")
+
+
+def run_interactive():
+    print("Flight Search CLI (type /quit to exit, /reset to reset conversation)")
+    # Health
+    try:
+        r = requests.get(HEALTH_URL, timeout=min(CLIENT_TIMEOUT, 10))
+        print("Health:", r.json())
+    except Exception as e:
+        print("Warning: health check failed:", e)
+
+    conversation_history: List[Dict[str, str]] = []
+    try:
+        while True:
+            user_message = input("You: ").strip()
+            if not user_message:
+                continue
+            if user_message.lower() in {"/quit", "/exit"}:
+                print("Bye!")
+                return
+            if user_message.lower() == "/reset":
+                try:
+                    requests.post(RESET_URL, timeout=min(CLIENT_TIMEOUT, 10))
+                except Exception:
+                    pass
+                conversation_history.clear()
+                print("Conversation reset.")
+                continue
+
+            payload = {
+                "message": user_message,
+                "conversation_history": conversation_history,
+            }
+            resp = requests.post(CHAT_URL, json=payload, timeout=CLIENT_TIMEOUT)
+            if resp.status_code != 200:
+                print("Request failed", resp.status_code, resp.text)
+                continue
+            data = resp.json()
+
+            # Persist the turn
+            conversation_history.append({"role": "user", "content": user_message})
+            assistant_message = data.get("message", "")
+            conversation_history.append({"role": "assistant", "content": assistant_message})
+
+            rtype = data.get("response_type")
+            print("Assistant:", assistant_message)
+
+            if rtype == "results":
+                flights = data.get("flights", [])
+                print_grouped_tables([f for f in flights if f])
+                summary = data.get("summary")
+                if summary:
+                    print("\nSummary:\n", summary)
+                print("(New search? continue chatting or type /reset)")
+    except KeyboardInterrupt:
+        print("\nBye!")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Flight Search Chat CLI")
+    parser.add_argument("--auto", action="store_true", help="Run in auto mode (no interactive input)")
+    args = parser.parse_args()
+
+    if args.auto:
+        run_auto()
+    else:
+        run_interactive()
 
 
 if __name__ == "__main__":
