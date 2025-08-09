@@ -1,6 +1,7 @@
 import json
 import requests
 import os
+import re
 from datetime import datetime, timedelta
 from typing import Dict, Any
 from langchain_openai import ChatOpenAI
@@ -11,12 +12,19 @@ from validators import validate_extracted_info
 from dotenv import load_dotenv
 load_dotenv()
 
-# Initialize OpenAI client
-llm = ChatOpenAI(
-    model="gpt-4o-mini",
-    temperature=0.1,
-    api_key=os.getenv("OPENAI_API_KEY")
-)
+# Lazy LLM initialization to avoid import-time key errors
+_llm = None
+
+def get_llm() -> ChatOpenAI:
+    global _llm
+    if _llm is None:
+        _llm = ChatOpenAI(
+            model="gpt-4o-mini",
+            temperature=0.1,
+            api_key=os.getenv("OPENAI_API_KEY")
+        )
+    return _llm
+
 
 def analyze_conversation_node(state: FlightSearchState) -> FlightSearchState:
     """Analyze full conversation to extract flight information"""
@@ -50,6 +58,7 @@ Extract ALL available information and return JSON:
 Return only valid JSON. Use the LATEST information if there were corrections."""
 
     try:
+        llm = get_llm()
         extraction_response = llm.invoke([HumanMessage(content=extraction_prompt)])
         extracted_info = json.loads(extraction_response.content)
         
@@ -91,7 +100,7 @@ Generate a friendly, conversational question to get the missing information or f
 Ask for only the MOST IMPORTANT missing piece of information.
 Be natural and helpful."""
 
-            followup_response = llm.invoke([HumanMessage(content=followup_prompt)])
+            followup_response = get_llm().invoke([HumanMessage(content=followup_prompt)])
             state["followup_question"] = followup_response.content
             state["needs_followup"] = True
             state["info_complete"] = False
@@ -156,7 +165,7 @@ Examples:
 Just return the 3-letter code, nothing else."""
 
         try:
-            airport_response = llm.invoke([HumanMessage(content=airport_prompt)])
+            airport_response = get_llm().invoke([HumanMessage(content=airport_prompt)])
             airport_code = airport_response.content.strip().upper()
             
             # Validate it's 3 letters
@@ -472,7 +481,7 @@ Keep your response conversational and helpful, limit to 2-3 paragraphs."""
 
     try:
         if state.get("formatted_results") and len(state.get("formatted_results", [])) > 0:
-            summary_response = llm.invoke([HumanMessage(content=summary_prompt)])
+            summary_response = get_llm().invoke([HumanMessage(content=summary_prompt)])
             state["summary"] = summary_response.content
         else:
             state["summary"] = """I wasn't able to find any flights for your search criteria. This could be due to no available flights on your chosen date, route not being available, or other factors. Try adjusting your departure date by a few days or consider nearby airports."""

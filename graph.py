@@ -13,26 +13,14 @@ from nodes import (
     generate_followup_node
 )
 
-def check_info_complete(state: FlightSearchState) -> str:
-    """Check if all required information is collected and avoid infinite loops."""
-    
-    followup_count = state.get("followup_count", 0) + 1
-    state["followup_count"] = followup_count
 
-    # 1️⃣ If we have all info, skip to normalize
+def check_info_complete(state: FlightSearchState) -> str:
+    """Decide next step based on collected info without mutating state."""
+    # If we have all info, proceed
     if state.get("info_complete", False):
         return "normalize_info"
-
-    # 2️⃣ Safety: stop looping after 3 follow-ups
-    if followup_count > 3:
-        state["needs_followup"] = False
-        return "normalize_info"
-
-    # 3️⃣ Default behavior: still missing info
-    if state.get("needs_followup", True):
-        return "generate_followup"
-
-    return "normalize_info"
+    # Otherwise, ask a follow-up and end this turn
+    return "ask_followup"
 
 
 
@@ -63,7 +51,7 @@ def create_flight_search_graph():
         "generate_followup",
         check_info_complete,
         {
-            "generate_followup": "generate_followup",
+            "ask_followup": END,
             "normalize_info": "normalize_info"
         }
     )
