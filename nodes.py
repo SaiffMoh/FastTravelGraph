@@ -149,6 +149,9 @@ def analyze_conversation_node(state: FlightSearchState) -> FlightSearchState:
             info = _extract_info_rule_based(src or "")
             extracted.update({k: v for k, v in info.items() if v})
 
+        # Force default to round trip
+        state["trip_type"] = "round trip"
+
         # Optionally refine with LLM if available
         use_llm = bool(os.getenv("OPENAI_API_KEY"))
         if use_llm:
@@ -176,7 +179,8 @@ Return only valid JSON.
         # Determine completeness
         required = ["departure_date", "origin", "destination", "cabin_class", "trip_type"]
         missing_fields = [f for f in required if not state.get(f)]
-        if (state.get('trip_type', '').lower() in ['round trip', 'round_trip'] and not state.get('duration')):
+        # Always require duration for round trips
+        if not state.get('duration'):
             missing_fields.append('duration')
 
         if missing_fields or validation_errors:
@@ -409,15 +413,16 @@ def get_access_token_node(state: FlightSearchState) -> FlightSearchState:
         "client_secret": os.getenv("AMADEUS_CLIENT_SECRET")
     }
 
-    _debug_print("Amadeus token request URL", url)
+    if DEBUG:
+        print("[DEBUG] Amadeus token: connecting…")
     try:
         response = requests.post(url, headers=headers, data=data)
-        _debug_print("Amadeus token response status", response.status_code)
         response.raise_for_status()
         token_json = response.json()
         state["access_token"] = token_json.get("access_token")
         state["current_node"] = "get_auth"
-        _debug_print("Amadeus token acquired (masked)", {"access_token_present": bool(state.get("access_token"))})
+        if DEBUG:
+            print("[DEBUG] Amadeus token: connected ✔")
     except Exception as e:
         print(f"Error getting access token: {e}")
         state["followup_question"] = "Sorry, I had trouble connecting to the flight search service. Please try again later."
@@ -426,58 +431,79 @@ def get_access_token_node(state: FlightSearchState) -> FlightSearchState:
     return state
 
 def get_flight_offers_node(state: FlightSearchState) -> FlightSearchState:
-    """Get flight offers from Amadeus API"""
-    url = "https://test.api.amadeus.com/v2/shopping/flight-offers"
+    """Get flight offers from Amadeus API for a 7-day window (input date + 6 days)."""
+    base_url = "https://test.api.amadeus.com/v2/shopping/flight-offers"
     headers = {
         "Authorization": f"Bearer {state['access_token']}",
         "Content-Type": "application/json"
     }
 
-    _debug_print("Amadeus flight-offers URL", url)
-    # Do not print Authorization header content
-    _debug_print("Amadeus headers (redacted)", {k: ("<redacted>" if k.lower()=="authorization" else v) for k, v in headers.items()})
-    _debug_print("Amadeus flight-offers POST body", state.get("body"))
-    
-    try:
-        response = requests.post(url, headers=headers, json=state["body"])
-        _debug_print("Amadeus flight-offers response status", response.status_code)
-        response.raise_for_status()
-        state["result"] = response.json()
-        state["current_node"] = "search_flights"
-        _debug_print("Amadeus full JSON response", state.get("result"))
-    except Exception as e:
-        print(f"Error getting flight offers: {e}")
-        # Attempt to show error body when available
-        try:
-            _debug_print("Amadeus error body", response.text)
-        except Exception:
-            pass
-        state["followup_question"] = "Sorry, I had trouble finding flights for your search. Please check your destinations and dates."
+    start_date_str = state.get("normalized_departure_date")
+    if not start_date_str:
         state["needs_followup"] = True
-    
+        state["followup_question"] = "What date would you like to depart?"
+        return state
+
+    try:
+        start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+    except Exception:
+        state["needs_followup"] = True
+        state["followup_question"] = "Please provide a valid departure date (e.g., 2025-12-25)."
+        return state
+
+    if DEBUG:
+        print("[DEBUG] Amadeus flight-offers: connecting…")
+
+    all_results = []
+    for day_offset in range(0, 7):
+        query_date = (start_date + timedelta(days=day_offset)).strftime("%Y-%m-%d")
+        body = dict(state["body"]) if state.get("body") else {}
+        # Update departure date and round-trip return automatically based on duration
+        if body.get("originDestinations"):
+            body["originDestinations"][0]["departureDateTimeRange"]["date"] = query_date
+            if len(body["originDestinations"]) > 1 and state.get("duration") is not None:
+                # recompute return date from the new query_date
+                dep_date_dt = datetime.strptime(query_date, "%Y-%m-%d")
+                return_date = (dep_date_dt + timedelta(days=int(state.get("duration", 0)))).strftime("%Y-%m-%d")
+                body["originDestinations"][1]["departureDateTimeRange"]["date"] = return_date
+        # Ensure 5 offers
+        body.setdefault("searchCriteria", {}).setdefault("maxFlightOffers", 5)
+
+        try:
+            response = requests.post(base_url, headers=headers, json=body)
+            response.raise_for_status()
+            data = response.json()
+            flights = data.get("data", []) or []
+            # Annotate each with search_date and keep at most 5
+            for f in flights[:5]:
+                f["_search_date"] = query_date
+            all_results.extend(flights[:5])
+        except Exception as e:
+            print(f"Error getting flight offers for {query_date}: {e}")
+            continue
+
+    state["result"] = {"data": all_results}
+    state["current_node"] = "search_flights"
+    if DEBUG:
+        print("[DEBUG] Amadeus flight-offers: connected ✔")
     return state
 
 def display_results_node(state: FlightSearchState) -> FlightSearchState:
-    """Format flight results for display"""
-    
+    """Format flight results for display with layover details and search date."""
+
     def format_duration(duration_str):
-        """Convert PT2H30M to '2h 30m'"""
         if not duration_str or not duration_str.startswith('PT'):
             return duration_str
-        
-        duration_str = duration_str[2:]  # Remove 'PT'
+        duration_str = duration_str[2:]
         hours = 0
         minutes = 0
-        
         if 'H' in duration_str:
             hours_part = duration_str.split('H')[0]
             hours = int(hours_part) if hours_part.isdigit() else 0
             duration_str = duration_str.split('H')[1] if 'H' in duration_str else duration_str
-        
         if 'M' in duration_str:
             minutes_part = duration_str.split('M')[0]
             minutes = int(minutes_part) if minutes_part.isdigit() else 0
-        
         if hours > 0 and minutes > 0:
             return f"{hours}h {minutes}m"
         elif hours > 0:
@@ -486,9 +512,8 @@ def display_results_node(state: FlightSearchState) -> FlightSearchState:
             return f"{minutes}m"
         else:
             return "N/A"
-    
+
     def format_time(datetime_str):
-        """Format datetime to time"""
         if not datetime_str:
             return "N/A"
         try:
@@ -496,62 +521,64 @@ def display_results_node(state: FlightSearchState) -> FlightSearchState:
             return dt.strftime('%H:%M')
         except:
             return datetime_str
-    
+
     try:
-        if not state.get("result") or "data" not in state["result"]:
-            state["formatted_results"] = []
-            state["needs_followup"] = True
-            state["followup_question"] = "No flights found for your search criteria. Would you like to try different dates or destinations?"
-            return state
-        
-        flights = state["result"]["data"]
-        
+        flights = state.get("result", {}).get("data", [])
         if not flights:
             state["formatted_results"] = []
             state["needs_followup"] = True
             state["followup_question"] = "No flights found for your search criteria. Would you like to try different dates or destinations?"
             return state
-        
-        # Format results as structured data for API response
+
         formatted_flights = []
-        
-        for flight in flights[:5]:  # Limit to 5 results
+        for flight in flights[:35]:  # 7 days * 5 offers
             price = flight.get("price", {})
             currency = price.get("currency", "USD")
             total_price = price.get("total", "N/A")
-            
-            # Get main itinerary (outbound)
+            search_date = flight.get("_search_date")
+
             itineraries = flight.get("itineraries", [])
-            if itineraries:
-                main_itinerary = itineraries[0]
-                segments = main_itinerary.get("segments", [])
-                
-                if segments:
-                    first_segment = segments[0]
-                    last_segment = segments[-1]
-                    
-                    departure = first_segment.get("departure", {})
-                    arrival = last_segment.get("arrival", {})
-                    
-                    flight_info = {
-                        "airline": first_segment.get("carrierCode", "N/A"),
-                        "flight_number": first_segment.get("number", "N/A"),
-                        "departure_airport": departure.get("iataCode", "N/A"),
-                        "arrival_airport": arrival.get("iataCode", "N/A"),
-                        "departure_time": format_time(departure.get("at", "")),
-                        "arrival_time": format_time(arrival.get("at", "")),
-                        "duration": format_duration(main_itinerary.get("duration", "")),
-                        "price": total_price,
-                        "currency": currency,
-                        "stops": len(segments) - 1,
-                        "full_details": flight  # Include full flight data
-                    }
-                    
-                    formatted_flights.append(flight_info)
-        
+            if not itineraries:
+                continue
+
+            # Use the outbound itinerary to display main info
+            main_itinerary = itineraries[0]
+            segments = main_itinerary.get("segments", [])
+            layovers = []
+            if segments:
+                for i in range(len(segments) - 1):
+                    arr = segments[i].get("arrival", {})
+                    dep = segments[i+1].get("departure", {})
+                    # Layover airport and time window
+                    layovers.append(
+                        f"{arr.get('iataCode','N/A')} {format_time(arr.get('at',''))} → {format_time(dep.get('at',''))}"
+                    )
+
+                first_segment = segments[0]
+                last_segment = segments[-1]
+                departure = first_segment.get("departure", {})
+                arrival = last_segment.get("arrival", {})
+
+                flight_info = {
+                    "airline": first_segment.get("carrierCode", "N/A"),
+                    "flight_number": first_segment.get("number", "N/A"),
+                    "departure_airport": departure.get("iataCode", "N/A"),
+                    "arrival_airport": arrival.get("iataCode", "N/A"),
+                    "departure_time": format_time(departure.get("at", "")),
+                    "arrival_time": format_time(arrival.get("at", "")),
+                    "duration": format_duration(main_itinerary.get("duration", "")),
+                    "price": total_price,
+                    "currency": currency,
+                    "stops": max(0, len(segments) - 1),
+                    "layovers": layovers,
+                    "search_date": search_date,
+                    "full_details": flight
+                }
+                formatted_flights.append(flight_info)
+
         state["formatted_results"] = formatted_flights
         state["current_node"] = "display_results"
-        
+
     except Exception as e:
         print(f"Error formatting results: {e}")
         state["formatted_results"] = []

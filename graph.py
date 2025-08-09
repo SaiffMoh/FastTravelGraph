@@ -99,5 +99,7 @@ def initialize_state_from_request(message: str, conversation_history: List[Messa
         "info_complete": False,
         "followup_question": None,
         "current_node": "analyze_conversation",
-        "followup_count": 0  # ✅ ensure safe default
+        "followup_count": 0,
+        # Default to round trip
+        "trip_type": "round trip"
     }

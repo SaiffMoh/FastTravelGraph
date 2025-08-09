@@ -63,6 +63,10 @@ class FlightResult(BaseModel):
     duration: str
     price: str
     currency: str
+    # Extended details
+    stops: Optional[int] = None
+    layovers: Optional[List[str]] = None
+    search_date: Optional[str] = None
 
 class ChatResponse(BaseModel):
     response_type: str  # "question" or "results" or "error"

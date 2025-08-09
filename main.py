@@ -76,7 +76,7 @@ async def chat_endpoint(request: ChatRequest):
                 detail=f"Missing API keys: {', '.join(missing_keys)}"
             )
 
-        # Initialize conversation state safely
+        # Initialize conversation state safely (default round trip)
         state = initialize_state_from_request(user_message, conversation_history)
         state.setdefault("conversation", conversation_history)
         state.setdefault("current_message", user_message)
@@ -119,7 +119,10 @@ async def chat_endpoint(request: ChatRequest):
                 arrival_time=str(f.get("arrival_time", "N/A")),
                 duration=str(f.get("duration", "N/A")),
                 price=str(f.get("price", "N/A")),
-                currency=str(f.get("currency", "USD"))
+                currency=str(f.get("currency", "USD")),
+                stops=int(f.get("stops", 0)) if f.get("stops") is not None else None,
+                layovers=[str(x) for x in (f.get("layovers") or [])],
+                search_date=str(f.get("search_date", "")) or None,
             )
             for f in result.get("formatted_results", [])
         ]
