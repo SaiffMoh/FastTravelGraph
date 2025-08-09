@@ -14,10 +14,10 @@ HEALTH_URL = f"{BASE_URL}/health"
 def pick_reply(question: str) -> str:
     q = (question or "").lower()
     if "one way" in q or "round" in q and "trip" in q:
-        return "one way"
+        return "round trip"
     if "cabin" in q or "economy" in q or "business" in q or "first" in q:
         return "economy"
-    if "how many days" in q or "stay" in q:
+    if "how many days" in q or "stay" in q or "duration" in q:
         return "5 days"
     if "date" in q or "depart" in q:
         return "2025-12-20"
@@ -25,7 +25,7 @@ def pick_reply(question: str) -> str:
         return "Cairo"
     if "which city are you flying to" in q or "to" in q:
         return "Dubai"
-    return "Here are the details: Cairo to Dubai, 2025-12-20, economy, one way."
+    return "Cairo to Dubai, 2025-12-20, round trip, 5 days, economy."
 
 
 def print_flights(flights: List[Dict[str, Any]]):
@@ -33,7 +33,10 @@ def print_flights(flights: List[Dict[str, Any]]):
         print("No flights returned.")
         return
     for i, f in enumerate(flights, 1):
-        print(f"#{i} {f.get('airline')} {f.get('flight_number')} | {f.get('departure_airport')} -> {f.get('arrival_airport')} | {f.get('departure_time')} - {f.get('arrival_time')} | {f.get('duration')} | {f.get('price')} {f.get('currency')}")
+        layovers = f.get('layovers') or []
+        layover_str = "; ".join(layovers) if layovers else "non-stop"
+        date_tag = f" [{f.get('search_date')}]" if f.get('search_date') else ""
+        print(f"#{i}{date_tag} {f.get('airline')} {f.get('flight_number')} | {f.get('departure_airport')} -> {f.get('arrival_airport')} | {f.get('departure_time')} - {f.get('arrival_time')} | {f.get('duration')} | {f.get('price')} {f.get('currency')} | stops: {f.get('stops')} | layovers: {layover_str}")
 
 
 def main():
@@ -47,7 +50,7 @@ def main():
     conversation_history: List[Dict[str, str]] = []
     user_message = "i want to travel from cairo to dubai"
 
-    for step in range(1, 10):
+    for step in range(1, 12):
         payload = {
             "message": user_message,
             "conversation_history": conversation_history,
