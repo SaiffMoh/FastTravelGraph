@@ -53,7 +53,7 @@ class ExtractedInfo(BaseModel):
     trip_type: Optional[str] = None
     duration: Optional[int] = None
 
-class FlightResult(BaseModel):
+class FlightLeg(BaseModel):
     airline: str
     flight_number: str
     departure_airport: str
@@ -61,12 +61,15 @@ class FlightResult(BaseModel):
     departure_time: str
     arrival_time: str
     duration: str
-    price: str
-    currency: str
-    # Extended details
     stops: Optional[int] = None
     layovers: Optional[List[str]] = None
+
+class FlightResult(BaseModel):
+    price: str
+    currency: str
     search_date: Optional[str] = None
+    outbound: FlightLeg
+    return_leg: Optional[FlightLeg] = None
 
 class ChatResponse(BaseModel):
     response_type: str  # "question" or "results" or "error"
