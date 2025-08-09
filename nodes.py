@@ -3,7 +3,7 @@ import requests
 import os
 import re
 from datetime import datetime, timedelta
-from typing import Dict, Any
+from typing import Dict, Any, List
 from langchain_openai import ChatOpenAI
 from langchain.schema import HumanMessage, SystemMessage
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -432,7 +432,7 @@ def get_access_token_node(state: FlightSearchState) -> FlightSearchState:
     return state
 
 def get_flight_offers_node(state: FlightSearchState) -> FlightSearchState:
-    """Get flight offers from Amadeus API for a 7-day window (input date + 6 days) in parallel."""
+    """Get flight offers from Amadeus API for a 3-day window (input date + 2 days) in parallel."""
     base_url = "https://test.api.amadeus.com/v2/shopping/flight-offers"
     headers = {
         "Authorization": f"Bearer {state['access_token']}",
@@ -455,9 +455,9 @@ def get_flight_offers_node(state: FlightSearchState) -> FlightSearchState:
     if DEBUG:
         print("[DEBUG] Amadeus flight-offers: connecting…")
 
-    # Prepare 7 request bodies
+    # Prepare 3 request bodies (D, D+1, D+2)
     bodies = []
-    for day_offset in range(0, 7):
+    for day_offset in range(0, 3):
         query_date = (start_date + timedelta(days=day_offset)).strftime("%Y-%m-%d")
         body = dict(state["body"]) if state.get("body") else {}
         if body.get("originDestinations"):
@@ -485,8 +485,7 @@ def get_flight_offers_node(state: FlightSearchState) -> FlightSearchState:
             print(f"Error getting flight offers for {day}: {exc}")
             return []
 
-    # Fetch in parallel
-    with ThreadPoolExecutor(max_workers=7) as executor:
+    with ThreadPoolExecutor(max_workers=3) as executor:
         futures = [executor.submit(fetch_for_day, b) for b in bodies]
         for fut in as_completed(futures):
             all_results.extend(fut.result())
@@ -498,8 +497,8 @@ def get_flight_offers_node(state: FlightSearchState) -> FlightSearchState:
     return state
 
 def display_results_node(state: FlightSearchState) -> FlightSearchState:
-    """Format flight results for display with layover details and search date."""
-
+    """Format flight results for display with outbound and return legs and search date."""
+    
     def format_duration(duration_str):
         if not duration_str or not duration_str.startswith('PT'):
             return duration_str
@@ -531,6 +530,31 @@ def display_results_node(state: FlightSearchState) -> FlightSearchState:
         except:
             return datetime_str
 
+    def build_leg(itinerary) -> Dict[str, Any]:
+        segments = itinerary.get("segments", [])
+        layovers = []
+        if not segments:
+            return None
+        for i in range(len(segments) - 1):
+            arr = segments[i].get("arrival", {})
+            dep = segments[i+1].get("departure", {})
+            layovers.append(f"{arr.get('iataCode','N/A')} {format_time(arr.get('at',''))} → {format_time(dep.get('at',''))}")
+        first_segment = segments[0]
+        last_segment = segments[-1]
+        departure = first_segment.get("departure", {})
+        arrival = last_segment.get("arrival", {})
+        return {
+            "airline": first_segment.get("carrierCode", "N/A"),
+            "flight_number": first_segment.get("number", "N/A"),
+            "departure_airport": departure.get("iataCode", "N/A"),
+            "arrival_airport": arrival.get("iataCode", "N/A"),
+            "departure_time": format_time(departure.get("at", "")),
+            "arrival_time": format_time(arrival.get("at", "")),
+            "duration": format_duration(itinerary.get("duration", "")),
+            "stops": max(0, len(segments) - 1),
+            "layovers": layovers,
+        }
+
     try:
         flights = state.get("result", {}).get("data", [])
         if not flights:
@@ -539,53 +563,23 @@ def display_results_node(state: FlightSearchState) -> FlightSearchState:
             state["followup_question"] = "No flights found for your search criteria. Would you like to try different dates or destinations?"
             return state
 
-        formatted_flights = []
-        for flight in flights[:35]:  # 7 days * 5 offers
-            price = flight.get("price", {})
-            currency = price.get("currency", "USD")
-            total_price = price.get("total", "N/A")
-            search_date = flight.get("_search_date")
-
+        formatted: List[Dict[str, Any]] = []
+        for flight in flights:
             itineraries = flight.get("itineraries", [])
             if not itineraries:
                 continue
+            outbound_leg = build_leg(itineraries[0])
+            return_leg = build_leg(itineraries[1]) if len(itineraries) > 1 else None
+            price = flight.get("price", {})
+            formatted.append({
+                "price": price.get("total", "N/A"),
+                "currency": price.get("currency", "USD"),
+                "search_date": flight.get("_search_date"),
+                "outbound": outbound_leg,
+                "return_leg": return_leg,
+            })
 
-            # Use the outbound itinerary to display main info
-            main_itinerary = itineraries[0]
-            segments = main_itinerary.get("segments", [])
-            layovers = []
-            if segments:
-                for i in range(len(segments) - 1):
-                    arr = segments[i].get("arrival", {})
-                    dep = segments[i+1].get("departure", {})
-                    # Layover airport and time window
-                    layovers.append(
-                        f"{arr.get('iataCode','N/A')} {format_time(arr.get('at',''))} → {format_time(dep.get('at',''))}"
-                    )
-
-                first_segment = segments[0]
-                last_segment = segments[-1]
-                departure = first_segment.get("departure", {})
-                arrival = last_segment.get("arrival", {})
-
-                flight_info = {
-                    "airline": first_segment.get("carrierCode", "N/A"),
-                    "flight_number": first_segment.get("number", "N/A"),
-                    "departure_airport": departure.get("iataCode", "N/A"),
-                    "arrival_airport": arrival.get("iataCode", "N/A"),
-                    "departure_time": format_time(departure.get("at", "")),
-                    "arrival_time": format_time(arrival.get("at", "")),
-                    "duration": format_duration(main_itinerary.get("duration", "")),
-                    "price": total_price,
-                    "currency": currency,
-                    "stops": max(0, len(segments) - 1),
-                    "layovers": layovers,
-                    "search_date": search_date,
-                    "full_details": flight
-                }
-                formatted_flights.append(flight_info)
-
-        state["formatted_results"] = formatted_flights
+        state["formatted_results"] = formatted
         state["current_node"] = "display_results"
 
     except Exception as e:

@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import json
+from collections import defaultdict
 from typing import List, Dict, Any
 
 import requests
@@ -34,15 +35,45 @@ def pick_reply(question: str) -> str:
     return "Cairo to Dubai, 2025-12-20, round trip, 5 days, economy."
 
 
-def print_flights(flights: List[Dict[str, Any]]):
+def tab_row(cols: List[str]) -> str:
+    widths = [max(len(c), 10) for c in cols]
+    return " | ".join(c.ljust(w) for c, w in zip(cols, widths))
+
+
+def print_grouped_tables(flights: List[Dict[str, Any]]):
     if not flights:
         print("No flights returned.")
         return
-    for i, f in enumerate(flights, 1):
-        layovers = f.get('layovers') or []
-        layover_str = "; ".join(layovers) if layovers else "non-stop"
-        date_tag = f" [{f.get('search_date')}]" if f.get('search_date') else ""
-        print(f"#{i}{date_tag} {f.get('airline')} {f.get('flight_number')} | {f.get('departure_airport')} -> {f.get('arrival_airport')} | {f.get('departure_time')} - {f.get('arrival_time')} | {f.get('duration')} | {f.get('price')} {f.get('currency')} | stops: {f.get('stops')} | layovers: {layover_str}")
+    by_day: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for f in flights:
+        by_day[f.get('search_date') or 'Unknown'].append(f)
+
+    for day in sorted(by_day.keys()):
+        print(f"\n=== Offers for {day} ===")
+        header = ["Price", "Curr", "Leg", "Airline", "Number", "From", "To", "Dep", "Arr", "Dur", "Stops", "Layovers"]
+        print(tab_row(header))
+        print("-" * 120)
+        for f in by_day[day]:
+            for leg_key, leg_name in (("outbound", "Out"), ("return_leg", "Ret")):
+                leg = f.get(leg_key)
+                if not leg:
+                    continue
+                layovers = "; ".join(leg.get('layovers') or []) or "non-stop"
+                row = [
+                    str(f.get("price", "N/A")),
+                    str(f.get("currency", "USD")),
+                    leg_name,
+                    str(leg.get("airline", "N/A")),
+                    str(leg.get("flight_number", "N/A")),
+                    str(leg.get("departure_airport", "N/A")),
+                    str(leg.get("arrival_airport", "N/A")),
+                    str(leg.get("departure_time", "N/A")),
+                    str(leg.get("arrival_time", "N/A")),
+                    str(leg.get("duration", "N/A")),
+                    str(leg.get("stops", 0)),
+                    layovers,
+                ]
+                print(tab_row(row))
 
 
 def main():
@@ -79,7 +110,7 @@ def main():
 
         if rtype == "results":
             flights = data.get("flights", [])
-            print_flights(flights)
+            print_grouped_tables([f for f in flights if f])
             summary = data.get("summary")
             if summary:
                 print("\nSummary:\n", summary)

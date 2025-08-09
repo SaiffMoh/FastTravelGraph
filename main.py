@@ -111,18 +111,31 @@ async def chat_endpoint(request: ChatRequest):
         # Build flight results
         flights = [
             FlightResult(
-                airline=str(f.get("airline", "N/A")),
-                flight_number=str(f.get("flight_number", "N/A")),
-                departure_airport=str(f.get("departure_airport", "N/A")),
-                arrival_airport=str(f.get("arrival_airport", "N/A")),
-                departure_time=str(f.get("departure_time", "N/A")),
-                arrival_time=str(f.get("arrival_time", "N/A")),
-                duration=str(f.get("duration", "N/A")),
                 price=str(f.get("price", "N/A")),
                 currency=str(f.get("currency", "USD")),
-                stops=int(f.get("stops", 0)) if f.get("stops") is not None else None,
-                layovers=[str(x) for x in (f.get("layovers") or [])],
                 search_date=str(f.get("search_date", "")) or None,
+                outbound={
+                    "airline": str(f.get("outbound", {}).get("airline", "N/A")),
+                    "flight_number": str(f.get("outbound", {}).get("flight_number", "N/A")),
+                    "departure_airport": str(f.get("outbound", {}).get("departure_airport", "N/A")),
+                    "arrival_airport": str(f.get("outbound", {}).get("arrival_airport", "N/A")),
+                    "departure_time": str(f.get("outbound", {}).get("departure_time", "N/A")),
+                    "arrival_time": str(f.get("outbound", {}).get("arrival_time", "N/A")),
+                    "duration": str(f.get("outbound", {}).get("duration", "N/A")),
+                    "stops": int(f.get("outbound", {}).get("stops", 0)) if f.get("outbound", {}).get("stops") is not None else None,
+                    "layovers": [str(x) for x in (f.get("outbound", {}).get("layovers") or [])],
+                },
+                return_leg={
+                    "airline": str(f.get("return_leg", {}).get("airline", "N/A")),
+                    "flight_number": str(f.get("return_leg", {}).get("flight_number", "N/A")),
+                    "departure_airport": str(f.get("return_leg", {}).get("departure_airport", "N/A")),
+                    "arrival_airport": str(f.get("return_leg", {}).get("arrival_airport", "N/A")),
+                    "departure_time": str(f.get("return_leg", {}).get("departure_time", "N/A")),
+                    "arrival_time": str(f.get("return_leg", {}).get("arrival_time", "N/A")),
+                    "duration": str(f.get("return_leg", {}).get("duration", "N/A")),
+                    "stops": int(f.get("return_leg", {}).get("stops", 0)) if f.get("return_leg", {}).get("stops") is not None else None,
+                    "layovers": [str(x) for x in (f.get("return_leg", {}).get("layovers") or [])],
+                } if f.get("return_leg") else None,
             )
             for f in result.get("formatted_results", [])
         ]
