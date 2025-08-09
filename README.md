@@ -14,10 +14,6 @@ An AI-powered flight search assistant built with FastAPI + LangGraph that:
 
 ## Setup
 1) Install deps
-- Linux/macOS:
-  ```bash
-  python3 -m pip install --break-system-packages -r requirements.txt
-  ```
 - Windows (inside venv):
   ```powershell
   pip install -r requirements.txt
