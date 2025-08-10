@@ -102,12 +102,38 @@ async def chat_endpoint(request: ChatRequest):
 
         # Still collecting info
         if result.get("needs_followup", True):
-            return ChatResponse(
-                response_type="question",
-                message=result.get("followup_question", "Could you provide more details about your flight?"),
-                extracted_info=extracted_info,
-                debug_trace=result.get("node_trace")
-            )
+            # Check if we're waiting for flight selection
+            if result.get("waiting_for_selection", False):
+                # Format detailed flight offers for display
+                detailed_offers = []
+                all_offers = result.get("all_offers", [])
+                
+                for offer_data in all_offers:
+                    details = offer_data.get("display_details", {})
+                    detailed_offer = {
+                        "offer_id": details.get("offer_id"),
+                        "price": details.get("price"),
+                        "search_date": details.get("search_date"),
+                        "outbound_details": details.get("outbound_details", {}),
+                        "return_details": details.get("return_details")
+                    }
+                    detailed_offers.append(detailed_offer)
+                
+                return ChatResponse(
+                    response_type="selection",
+                    message=result.get("followup_question", "Please select a flight offer to proceed."),
+                    extracted_info=extracted_info,
+                    debug_trace=result.get("node_trace"),
+                    all_offers=detailed_offers,
+                    waiting_for_selection=True
+                )
+            else:
+                return ChatResponse(
+                    response_type="question",
+                    message=result.get("followup_question", "Could you provide more details about your flight?"),
+                    extracted_info=extracted_info,
+                    debug_trace=result.get("node_trace")
+                )
 
         # Build flight results
         flights = [
@@ -141,14 +167,35 @@ async def chat_endpoint(request: ChatRequest):
             for f in result.get("formatted_results", [])
         ]
 
-        return ChatResponse(
-            response_type="results",
-            message="Here are your flight options:",
-            extracted_info=extracted_info,
-            flights=flights,
-            summary=result.get("summary"),
-            debug_trace=result.get("node_trace")
-        )
+        # Check if user has selected a flight offer
+        if result.get("selected_flight_offer_id"):
+            # Get the selected flight offer details
+            selected_offer = result.get("selected_flight_offer", {})
+            selected_offer_id = result.get("selected_flight_offer_id")
+            
+            # Create a detailed confirmation response
+            confirmation_message = result.get("final_confirmation", "Your flight has been selected successfully!")
+            
+            return ChatResponse(
+                response_type="confirmation",
+                message=confirmation_message,
+                extracted_info=extracted_info,
+                flights=flights,
+                summary=result.get("summary"),
+                debug_trace=result.get("node_trace"),
+                # Include selected flight details
+                selected_flight_offer_id=selected_offer_id,
+                selected_flight_offer=selected_offer
+            )
+        else:
+            return ChatResponse(
+                response_type="results",
+                message="Here are your flight options:",
+                extracted_info=extracted_info,
+                flights=flights,
+                summary=result.get("summary"),
+                debug_trace=result.get("node_trace")
+            )
 
     except HTTPException:
         raise

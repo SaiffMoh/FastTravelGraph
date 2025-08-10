@@ -81,6 +81,71 @@ def print_grouped_tables(flights: List[Dict[str, Any]]):
                 print(tab_row(row))
 
 
+def print_flight_offers_table(all_offers: List[Dict[str, Any]]):
+    """Display flight offers in a formatted table"""
+    if not all_offers:
+        print("No offers available for selection")
+        return
+    
+    print("\n=== Flight Offers Available ===")
+    
+    # Create table headers
+    headers = ["Offer ID", "Price", "Date", "Outbound", "Return", "Duration", "Stops"]
+    col_widths = [12, 15, 12, 25, 25, 15, 10]
+    
+    # Print header
+    header_row = " | ".join(h.ljust(w) for h, w in zip(headers, col_widths))
+    print(header_row)
+    print("-" * len(header_row))
+    
+    # Print each offer as a row
+    for offer in all_offers:
+        offer_id = offer.get("offer_id", "N/A")
+        price = offer.get("price", "N/A")
+        search_date = offer.get("search_date", "N/A")
+        
+        # Format outbound details
+        outbound = offer.get("outbound_details", {})
+        outbound_str = f"{outbound.get('airline', 'N/A')} {outbound.get('flight_number', 'N/A')}"
+        if outbound.get('route'):
+            outbound_str += f"\n{outbound['route']}"
+        if outbound.get('times'):
+            outbound_str += f"\n{outbound['times']}"
+        
+        # Format return details
+        return_details = offer.get("return_details")
+        return_str = "N/A"
+        if return_details:
+            return_str = f"{return_details.get('airline', 'N/A')} {return_details.get('flight_number', 'N/A')}"
+            if return_details.get('route'):
+                return_str += f"\n{return_details['route']}"
+            if return_details.get('times'):
+                return_str += f"\n{return_details['times']}"
+        
+        # Format duration and stops
+        outbound_duration = outbound.get('duration', 'N/A') if outbound else 'N/A'
+        return_duration = return_details.get('duration', 'N/A') if return_details else 'N/A'
+        duration_str = f"Out: {outbound_duration}\nRet: {return_duration}"
+        
+        outbound_stops = outbound.get('stops', 'N/A') if outbound else 'N/A'
+        return_stops = return_details.get('stops', 'N/A') if return_details else 'N/A'
+        stops_str = f"Out: {outbound_stops}\nRet: {return_stops}"
+        
+        # Create the row
+        row = [
+            offer_id.ljust(col_widths[0]),
+            str(price).ljust(col_widths[1]),
+            str(search_date).ljust(col_widths[2]),
+            outbound_str.ljust(col_widths[3]),
+            return_str.ljust(col_widths[4]),
+            duration_str.ljust(col_widths[5]),
+            stops_str.ljust(col_widths[6])
+        ]
+        
+        print(" | ".join(row))
+        print("-" * len(header_row))
+
+
 def run_auto():
     # Optional: health check
     try:
@@ -121,6 +186,20 @@ def run_auto():
             if summary:
                 print("\nSummary:\n", summary)
             print("\nDone.")
+            return
+        elif rtype == "selection":
+            # Handle flight selection
+            all_offers = data.get("all_offers", [])
+            if all_offers:
+                print_flight_offers_table(all_offers)
+                # Auto-select the first offer for testing
+                user_message = all_offers[0]["offer_id"]
+                print(f"\nAuto-selecting: {user_message}")
+            else:
+                print("No offers available for selection")
+                return
+        elif rtype == "confirmation":
+            print("Flight selection confirmed!")
             return
 
         # Otherwise, answer the follow-up
@@ -185,6 +264,17 @@ def run_interactive():
                 summary = data.get("summary")
                 if summary:
                     print("\nSummary:\n", summary)
+                print("(New search? continue chatting or type /reset)")
+            elif rtype == "selection":
+                # Handle flight selection
+                all_offers = data.get("all_offers", [])
+                if all_offers:
+                    print_flight_offers_table(all_offers)
+                    print("\nPlease enter the Offer ID you want to select:")
+                else:
+                    print("No offers available for selection")
+            elif rtype == "confirmation":
+                print("Flight selection confirmed!")
                 print("(New search? continue chatting or type /reset)")
     except KeyboardInterrupt:
         print("\nBye!")

@@ -30,6 +30,14 @@ class FlightSearchState(TypedDict):
     formatted_results: Optional[str]
     summary: Optional[str]
     
+    # Flight offer selection
+    all_offers: Optional[List[Dict[str, Any]]]
+    selected_flight_offer_id: Optional[str]
+    selected_flight_offer: Optional[Dict[str, Any]]
+    selected_flight_date: Optional[str]
+    waiting_for_selection: Optional[bool]
+    final_confirmation: Optional[str]
+    
     # Flow control
     info_complete: bool
     needs_followup: bool
@@ -74,10 +82,16 @@ class FlightResult(BaseModel):
     return_leg: Optional[FlightLeg] = None
 
 class ChatResponse(BaseModel):
-    response_type: str  # "question" or "results" or "error"
+    response_type: str  # "question", "results", "selection", "confirmation", or "error"
     message: str
     extracted_info: ExtractedInfo
     flights: Optional[List[FlightResult]] = None
     summary: Optional[str] = None
     error_code: Optional[str] = None
     debug_trace: Optional[List[str]] = None
+    # Flight selection fields
+    all_offers: Optional[List[Dict[str, Any]]] = None
+    waiting_for_selection: Optional[bool] = None
+    # Selected flight offer details
+    selected_flight_offer_id: Optional[str] = None
+    selected_flight_offer: Optional[Dict[str, Any]] = None

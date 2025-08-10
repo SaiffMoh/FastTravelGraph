@@ -46,7 +46,9 @@ POST /chat
 ```
 - Response types:
   - question: a follow-up message to collect a missing field
+  - selection: request to select a flight offer from displayed results
   - results: grouped flight offers by day
+  - confirmation: confirmation of selected flight offer
 
 ## Conversation flow rules
 - Default trip type: round trip
@@ -57,6 +59,12 @@ POST /chat
 - The server fetches up to 5 offers for the chosen date and for the next 2 days (3 days total)
 - Offers are grouped and labeled by search_date
 - Each offer contains two legs when available: outbound and return
+
+## Flight offer selection
+- After displaying flight results, the system prompts the user to select a specific offer
+- Each offer is assigned a unique ID (e.g., OFFER_001, OFFER_002)
+- Users can select an offer by entering the corresponding Offer ID
+- The system validates the selection and provides confirmation
 
 ## CLI usage (interactive chat)
 From project root:

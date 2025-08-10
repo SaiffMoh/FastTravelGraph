@@ -586,7 +586,7 @@ def display_results_node(state: FlightSearchState) -> FlightSearchState:
             return state
 
         formatted: List[Dict[str, Any]] = []
-        for flight in flights:
+        for i, flight in enumerate(flights, 1):
             itineraries = flight.get("itineraries", [])
             if not itineraries:
                 continue
@@ -596,6 +596,7 @@ def display_results_node(state: FlightSearchState) -> FlightSearchState:
             price = flight.get("price", {})
             
             formatted.append({
+                "offer_id": f"OFFER_{i:03d}",
                 "price": price.get("total", "N/A"),
                 "currency": price.get("currency", "USD"),
                 "search_date": flight.get("_search_date"),
@@ -661,6 +662,192 @@ Keep it conversational, helpful, and limit to 2-3 paragraphs. Start with somethi
         state["summary"] = "Great! I found your flight options. Here are the details:"
     
     state["current_node"] = "summarize"
+    return state
+
+
+def select_flight_offer_node(state: FlightSearchState) -> FlightSearchState:
+    """Allow user to select a specific flight offer from the displayed results."""
+    try:
+        (state.setdefault("node_trace", [])).append("select_flight_offer")
+    except Exception:
+        pass
+    
+    try:
+        # Check if we have formatted results to select from
+        formatted_results = state.get("formatted_results", [])
+        if not formatted_results:
+            state["needs_followup"] = True
+            state["followup_question"] = "No flight offers available to select from. Please try a new search."
+            return state
+        
+        # Generate unique IDs for each offer (if not already done in display_results)
+        offers_with_ids = []
+        for i, offer in enumerate(formatted_results, 1):
+            # Use existing offer_id if available, otherwise generate new one
+            offer_id = offer.get("offer_id", f"OFFER_{i:03d}")
+            
+            # Format detailed flight information for display
+            outbound = offer.get("outbound", {})
+            return_leg = offer.get("return_leg")
+            
+            # Create detailed offer information
+            offer_details = {
+                "offer_id": offer_id,
+                "price": f"{offer.get('price', 'N/A')} {offer.get('currency', 'USD')}",
+                "search_date": offer.get("search_date", "N/A"),
+                "outbound_details": {
+                    "airline": outbound.get("airline", "N/A"),
+                    "flight_number": outbound.get("flight_number", "N/A"),
+                    "route": f"{outbound.get('departure_airport', 'N/A')} → {outbound.get('arrival_airport', 'N/A')}",
+                    "times": f"{outbound.get('departure_time', 'N/A')} - {outbound.get('arrival_time', 'N/A')}",
+                    "duration": outbound.get("duration", "N/A"),
+                    "stops": f"{outbound.get('stops', 0)} stop(s)",
+                    "layovers": outbound.get("layovers", [])
+                }
+            }
+            
+            # Add return leg details if it's a round trip
+            if return_leg:
+                offer_details["return_details"] = {
+                    "airline": return_leg.get("airline", "N/A"),
+                    "flight_number": return_leg.get("flight_number", "N/A"),
+                    "route": f"{return_leg.get('departure_airport', 'N/A')} → {return_leg.get('arrival_airport', 'N/A')}",
+                    "times": f"{return_leg.get('departure_time', 'N/A')} - {return_leg.get('arrival_time', 'N/A')}",
+                    "duration": return_leg.get("duration", "N/A"),
+                    "stops": f"{return_leg.get('stops', 0)} stop(s)",
+                    "layovers": return_leg.get("layovers", [])
+                }
+            
+            offer_with_id = {
+                "offer_id": offer_id,
+                "offer": offer,
+                "date": offer.get("search_date", "N/A"),
+                "display_details": offer_details
+            }
+            offers_with_ids.append(offer_with_id)
+        
+        # Store all offers with IDs for later selection
+        state["all_offers"] = offers_with_ids
+        
+        # Create a comprehensive selection prompt with all flight details
+        selection_prompt = "Here are your flight options with detailed information:\n\n"
+        
+        for offer_data in offers_with_ids:
+            details = offer_data["display_details"]
+            selection_prompt += f"**{details['offer_id']}** - {details['price']}\n"
+            selection_prompt += f"  Outbound: {details['outbound_details']['airline']} {details['outbound_details']['flight_number']}\n"
+            selection_prompt += f"  Route: {details['outbound_details']['route']}\n"
+            selection_prompt += f"  Time: {details['outbound_details']['times']}\n"
+            selection_prompt += f"  Duration: {details['outbound_details']['duration']} ({details['outbound_details']['stops']})\n"
+            
+            if "return_details" in details:
+                return_details = details["return_details"]
+                selection_prompt += f"  Return: {return_details['airline']} {return_details['flight_number']}\n"
+                selection_prompt += f"  Route: {return_details['route']}\n"
+                selection_prompt += f"  Time: {return_details['times']}\n"
+                selection_prompt += f"  Duration: {return_details['duration']} ({return_details['stops']})\n"
+            
+            selection_prompt += "\n"
+        
+        selection_prompt += "Please select which flight offer you'd like to proceed with by entering the Offer ID (e.g., OFFER_001, OFFER_002, etc.)."
+        
+        # Set up the selection prompt
+        state["followup_question"] = selection_prompt
+        state["needs_followup"] = True
+        state["info_complete"] = False  # Reset to allow for selection
+        
+        # Store the selection state
+        state["waiting_for_selection"] = True
+        state["current_node"] = "select_flight_offer"
+        
+    except Exception as e:
+        print(f"Error in select flight offer node: {e}")
+        state["followup_question"] = "Sorry, I had trouble setting up the flight offer selection. Please try again."
+        state["needs_followup"] = True
+    
+    return state
+
+
+def process_flight_selection_node(state: FlightSearchState) -> FlightSearchState:
+    """Process the user's flight offer selection."""
+    try:
+        (state.setdefault("node_trace", [])).append("process_flight_selection")
+    except Exception:
+        pass
+    
+    try:
+        user_message = state.get("current_message", "").strip().upper()
+        all_offers = state.get("all_offers", [])
+        
+        # Check if user provided a valid offer ID
+        selected_offer = None
+        for offer_data in all_offers:
+            if offer_data["offer_id"] == user_message:
+                selected_offer = offer_data
+                break
+        
+        if selected_offer:
+            # Store the selected flight offer
+            state["selected_flight_offer_id"] = selected_offer["offer_id"]
+            state["selected_flight_offer"] = selected_offer["offer"]
+            state["selected_flight_date"] = selected_offer["date"]
+            
+            # Clear selection state
+            state["waiting_for_selection"] = False
+            state["needs_followup"] = False
+            state["followup_question"] = None
+            state["info_complete"] = True
+            
+            # Generate comprehensive confirmation message with full flight details
+            details = selected_offer["display_details"]
+            confirmation_message = f"Perfect! You've selected **{selected_offer['offer_id']}**.\n\n"
+            confirmation_message += f"**Flight Details:**\n"
+            confirmation_message += f"**Price:** {details['price']}\n"
+            confirmation_message += f"**Travel Date:** {details['search_date']}\n\n"
+            
+            # Outbound leg details
+            outbound = details["outbound_details"]
+            confirmation_message += f"**Outbound Flight:**\n"
+            confirmation_message += f"  Airline: {outbound['airline']} {outbound['flight_number']}\n"
+            confirmation_message += f"  Route: {outbound['route']}\n"
+            confirmation_message += f"  Departure: {outbound['times']}\n"
+            confirmation_message += f"  Duration: {outbound['duration']}\n"
+            confirmation_message += f"  Stops: {outbound['stops']}\n"
+            
+            if outbound['layovers']:
+                confirmation_message += f"  Layovers: {', '.join(outbound['layovers'])}\n"
+            
+            # Return leg details if it's a round trip
+            if "return_details" in details:
+                return_details = details["return_details"]
+                confirmation_message += f"\n**Return Flight:**\n"
+                confirmation_message += f"  Airline: {return_details['airline']} {return_details['flight_number']}\n"
+                confirmation_message += f"  Route: {return_details['route']}\n"
+                confirmation_message += f"  Departure: {return_details['times']}\n"
+                confirmation_message += f"  Duration: {return_details['duration']}\n"
+                confirmation_message += f"  Stops: {return_details['stops']}\n"
+                
+                if return_details['layovers']:
+                    confirmation_message += f"  Layovers: {', '.join(return_details['layovers'])}\n"
+            
+            confirmation_message += f"\nYour flight has been confirmed and saved! 🎉"
+            
+            # Set final confirmation message
+            state["final_confirmation"] = confirmation_message
+            
+        else:
+            # Invalid selection, ask again
+            state["followup_question"] = f"Invalid Offer ID '{user_message}'. Please enter a valid Offer ID from the list (e.g., OFFER_001, OFFER_002, etc.)."
+            state["needs_followup"] = True
+            state["waiting_for_selection"] = True
+        
+        state["current_node"] = "process_flight_selection"
+        
+    except Exception as e:
+        print(f"Error processing flight selection: {e}")
+        state["followup_question"] = "Sorry, I had trouble processing your selection. Please try again."
+        state["needs_followup"] = True
+    
     return state
 
 
