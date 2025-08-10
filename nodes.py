@@ -9,7 +9,6 @@ from langchain.schema import HumanMessage, SystemMessage
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from models import FlightSearchState
-from validators import validate_extracted_info
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -43,243 +42,246 @@ def get_llm() -> ChatOpenAI:
     return _llm
 
 
-def _extract_info_rule_based(text: str) -> Dict[str, Any]:
-    """Lightweight heuristic extractor for flight info from free-form text."""
-    result: Dict[str, Any] = {}
-    lower = text.lower()
+def llm_conversation_node(state: FlightSearchState) -> FlightSearchState:
+    """LLM-driven conversational node that intelligently handles all user input parsing and follow-up questions."""
+    try:
+        (state.setdefault("node_trace", [])).append("llm_conversation")
+    except Exception:
+        pass
 
-    # Origin and destination patterns
-    # 1) from X to Y
-    m = re.search(r"\bfrom\s+([a-zA-Z\s]+?)\s+to\s+([a-zA-Z\s]+)\b", lower)
-    if not m:
-        # 2) X to Y (avoid capturing questions like 'your origin and destination')
-        m = re.search(r"\b([a-zA-Z][a-zA-Z\s]+?)\s+to\s+([a-zA-Z][a-zA-Z\s]+)\b", lower)
-        if m and ("origin" in lower or "destination" in lower):
-            # likely the assistant question, not user answer; ignore
-            m = None
-    if not m:
-        # 3) origin X and destination Y
-        m = re.search(r"origin(?:\s+city)?\s*[:=]?\s*([a-zA-Z\s]+?)[,;]?\s*(?:and\s*)?destination(?:\s+city)?\s*[:=]?\s*([a-zA-Z\s]+)\b", lower)
-    if m:
-        result["origin"] = m.group(1).strip().title()
-        result["destination"] = m.group(2).strip().title()
-    else:
-        # 4) capture single-sided mentions
-        m_from = re.search(r"\bfrom\s+([a-zA-Z\s]+)\b", lower)
-        m_to = re.search(r"\bto\s+([a-zA-Z\s]+)\b", lower)
-        if m_from:
-            result["origin"] = m_from.group(1).strip().title()
-        if m_to:
-            result["destination"] = m_to.group(1).strip().title()
-
-    # Trip type
-    if re.search(r"\bround\b|\breturn\b|\bround\s*trip\b|\broundtrip\b", lower):
-        result["trip_type"] = "round trip"
-    elif re.search(r"one\s*way|oneway|single", lower):
-        result["trip_type"] = "one way"
-
-    # Cabin class
-    if re.search(r"\beconomy|coach|eco\b", lower):
-        result["cabin_class"] = "economy"
-    elif re.search(r"business|biz|premium", lower):
-        result["cabin_class"] = "business"
-    elif re.search(r"first\s*class|\bfirst\b", lower):
-        result["cabin_class"] = "first class"
-
-    # Duration (for round trip), e.g., "for 5 days" or "5 days"
-    dur = re.search(r"(for\s+)?(\d{1,3})\s*(days|day)\b", lower)
-    if dur:
-        try:
-            result["duration"] = int(dur.group(2))
-        except Exception:
-            pass
-
-    # Date patterns; validators will normalize
-    date_patterns = [
-        r"\b\d{4}-\d{2}-\d{2}\b",            # 2025-12-25
-        r"\b\d{1,2}/\d{1,2}/\d{2,4}\b",      # 12/25/2025 or 12/25/25
-        r"\b\d{1,2}-\d{1,2}-\d{2,4}\b",      # 12-25-2025
-        r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}(,\s*\d{4})?\b",
-    ]
-    for pat in date_patterns:
-        dm = re.search(pat, lower)
-        if dm:
-            result["departure_date"] = dm.group(0)
-            break
-
-    return result
-
-
-def _compose_followup(missing_fields):
-    priority = [
-        "departure_date",
-        "trip_type",
-        "duration",
-        "origin",
-        "destination",
-        "cabin_class",
-    ]
-    for field in priority:
-        if field in missing_fields:
-            if field == "departure_date":
-                return "What date would you like to depart? Please use a format like 2025-12-25."
-            if field == "trip_type":
-                return "Is this a one way or a round trip?"
-            if field == "duration":
-                return "How many days will you stay before returning?"
-            if field == "origin":
-                return "Which city are you flying from?"
-            if field == "destination":
-                return "Which city are you flying to?"
-            if field == "cabin_class":
-                return "Which cabin do you prefer: economy, business, or first class?"
-    return "Could you share a bit more about your flight details?"
-
-
-def analyze_conversation_node(state: FlightSearchState) -> FlightSearchState:
-    """Analyze conversation to extract flight information using heuristics, optionally refined by LLM."""
-    # Build conversation text and gather user-only history
-    conversation_text = "".join(f"{m['role']}: {m['content']}\n" for m in state["conversation"])
+    conversation_text = "".join(f"{m['role']}: {m['content']}\n" for m in state.get("conversation", []))
     user_text = state.get("current_message", "")
-    user_history = "\n".join(m["content"] for m in state["conversation"] if m.get("role") == "user")
+    
+    # Get current date for smart date parsing
+    current_date = datetime.now()
+    current_date_str = current_date.strftime("%Y-%m-%d")
+    current_month = current_date.month
+    current_day = current_date.day
+    current_year = current_date.year
 
     try:
-        # Heuristic extraction from current message and user history
-        extracted: Dict[str, Any] = {}
-        for src in (user_text, user_history):
-            info = _extract_info_rule_based(src or "")
-            extracted.update({k: v for k, v in info.items() if v})
+        if not os.getenv("OPENAI_API_KEY"):
+            # Fallback if no LLM available
+            state["followup_question"] = "I need an OpenAI API key to help you with flight bookings."
+            state["needs_followup"] = True
+            state["current_node"] = "llm_conversation"
+            return state
 
-        # Force default to round trip
-        state["trip_type"] = "round trip"
+        # Comprehensive LLM prompt for parsing and conversation management
+        llm_prompt = f"""You are an expert travel assistant helping users book flights. Today's date is {current_date_str}.
 
-        # Optionally refine with LLM if available
-        use_llm = bool(os.getenv("OPENAI_API_KEY"))
-        if use_llm:
-            extraction_prompt = f"""Analyze this ENTIRE conversation to extract flight booking information and output ONLY JSON keys shown:
+CONVERSATION SO FAR:
+{conversation_text}
 
-{conversation_text}user: {user_text}
+USER'S LATEST MESSAGE: "{user_text}"
 
-Keys: departure_date, origin, destination, cabin_class, trip_type, duration
-Return only valid JSON.
-"""
-            try:
-                extraction_response = get_llm().invoke([HumanMessage(content=extraction_prompt)])
-                model_info = json.loads(extraction_response.content)
-                if isinstance(model_info, dict):
-                    extracted.update({k: v for k, v in model_info.items() if v})
-            except Exception:
-                pass
+YOUR TASKS:
+1. Extract/update flight information from the entire conversation
+2. Intelligently parse dates and locations 
+3. Ask for ONE missing piece of information OR indicate completion
 
-        # Validate and update state
-        validated_info, validation_errors = validate_extracted_info(extracted)
-        for key, value in validated_info.items():
-            if value is not None:
-                state[key] = value
+DATE PARSING RULES (CRITICAL):
+- If user says "august 20th" or "Aug 20" → convert to "2025-08-20" 
+- If year omitted: use {current_year}, UNLESS month is before {current_month}, then use {current_year + 1}
+- If month and year omitted: use current month/year, UNLESS day is before {current_day}, then next month
+- If next month would be January, increment year too
+- Always output dates as YYYY-MM-DD
 
-        # Determine completeness
-        required = ["departure_date", "origin", "destination", "cabin_class", "trip_type"]
-        missing_fields = [f for f in required if not state.get(f)]
-        # Always require duration for round trips
-        if not state.get('duration'):
-            missing_fields.append('duration')
+LOCATION PARSING:
+- Convert casual names: "NYC" → "New York", "LA" → "Los Angeles"
+- Accept abbreviations and full names
 
-        if missing_fields or validation_errors:
-            # Follow-up question (LLM if available, else deterministic)
-            if bool(os.getenv("OPENAI_API_KEY")):
-                followup_prompt = f"""The user is booking a flight. Based on the conversation and current info below, ask ONE concise question to get the MOST IMPORTANT missing piece.
+CABIN CLASS PARSING:
+- "eco" → "economy", "biz" → "business", "first" → "first class"
 
-Missing fields: {missing_fields}
-Validation errors: {validation_errors}
+REQUIRED INFORMATION:
+1. departure_date (YYYY-MM-DD format)
+2. origin (city name)
+3. destination (city name) 
+4. cabin_class (economy/business/first class)
+5. duration (number of days for round trip)
 
-Current info: {json.dumps({k: state.get(k) for k in ['departure_date','origin','destination','cabin_class','trip_type','duration']}, ensure_ascii=False)}
-"""
-                try:
-                    followup_response = get_llm().invoke([HumanMessage(content=followup_prompt)])
-                    state["followup_question"] = followup_response.content
-                except Exception:
-                    state["followup_question"] = _compose_followup(missing_fields)
-            else:
-                state["followup_question"] = _compose_followup(missing_fields)
+CURRENT STATE:
+- departure_date: {state.get('departure_date', 'Not provided')}
+- origin: {state.get('origin', 'Not provided')}
+- destination: {state.get('destination', 'Not provided')}
+- cabin_class: {state.get('cabin_class', 'Not provided')}
+- duration: {state.get('duration', 'Not provided')}
+- trip_type: {state.get('trip_type', 'round trip')} (always round trip)
 
+RESPONSE FORMAT (JSON):
+{{
+  "departure_date": "YYYY-MM-DD or null",
+  "origin": "City Name or null", 
+  "destination": "City Name or null",
+  "cabin_class": "economy/business/first class or null",
+  "duration": number_or_null,
+  "followup_question": "Ask for ONE missing piece OR null if complete",
+  "needs_followup": true_or_false,
+  "info_complete": true_or_false
+}}
+
+EXAMPLES:
+- User: "I want to fly to Paris on august 20th" → {{"departure_date": "2025-08-20", "destination": "Paris", "followup_question": "Which city are you flying from?"}}
+- User: "from NYC, eco class" → {{"origin": "New York", "cabin_class": "economy", "followup_question": "Which city would you like to fly to?"}}
+- User: "5 days" → {{"duration": 5, "followup_question": "What date would you like to depart?"}}
+
+BE SMART: If user provides multiple pieces of info at once, extract all of them. Ask natural, conversational questions."""
+
+        response = get_llm().invoke([HumanMessage(content=llm_prompt)])
+        
+        try:
+            # Parse LLM response
+            llm_result = json.loads(response.content)
+            
+            # Update state with extracted information
+            if llm_result.get("departure_date"):
+                state["departure_date"] = llm_result["departure_date"]
+            if llm_result.get("origin"):
+                state["origin"] = llm_result["origin"]
+            if llm_result.get("destination"):
+                state["destination"] = llm_result["destination"]
+            if llm_result.get("cabin_class"):
+                state["cabin_class"] = llm_result["cabin_class"]
+            if llm_result.get("duration"):
+                state["duration"] = llm_result["duration"]
+                
+            # Set conversation state
+            state["followup_question"] = llm_result.get("followup_question")
+            state["needs_followup"] = llm_result.get("needs_followup", True)
+            state["info_complete"] = llm_result.get("info_complete", False)
+            
+            _debug_print("LLM extraction result", llm_result)
+            
+        except json.JSONDecodeError:
+            # Fallback if LLM doesn't return valid JSON
+            print(f"LLM response parsing error. Raw response: {response.content}")
+            state["followup_question"] = "I had trouble understanding. Could you please tell me your departure city, destination, and preferred travel date?"
             state["needs_followup"] = True
             state["info_complete"] = False
-        else:
-            state["needs_followup"] = False
-            state["info_complete"] = True
 
     except Exception as e:
-        print(f"Error in conversation analysis: {e}")
-        state["followup_question"] = _compose_followup(["departure_date"])  # sensible default
+        print(f"Error in LLM conversation node: {e}")
+        # Fallback error handling
+        state["followup_question"] = "I'm having technical difficulties. Please try again with your flight details."
         state["needs_followup"] = True
         state["info_complete"] = False
 
+    state["current_node"] = "llm_conversation"
+    return state
+
+
+def analyze_conversation_node(state: FlightSearchState) -> FlightSearchState:
+    """Validate the information extracted by the LLM conversation node."""
+    try:
+        (state.setdefault("node_trace", [])).append("analyze_conversation")
+    except Exception:
+        pass
+
+    # Check completeness - all required fields must be present
+    required_fields = ["departure_date", "origin", "destination", "cabin_class", "duration"]
+    missing_fields = []
+    
+    for field in required_fields:
+        if not state.get(field):
+            missing_fields.append(field)
+    
+    # Validate departure date format
+    departure_date = state.get("departure_date")
+    if departure_date:
+        try:
+            # Validate date format and ensure it's not in the past
+            parsed_date = datetime.strptime(departure_date, "%Y-%m-%d").date()
+            if parsed_date < datetime.now().date():
+                missing_fields.append("departure_date")
+                state["departure_date"] = None
+        except ValueError:
+            missing_fields.append("departure_date")
+            state["departure_date"] = None
+    
+    # Set completion status
+    if missing_fields:
+        state["info_complete"] = False
+        state["needs_followup"] = True
+        # The LLM should have already set an appropriate followup question
+        if not state.get("followup_question"):
+            state["followup_question"] = "I still need some information to search for flights. Could you help me with the missing details?"
+    else:
+        state["info_complete"] = True
+        state["needs_followup"] = False
+        state["followup_question"] = None
+    
+    _debug_print("Info completeness check", {
+        "missing_fields": missing_fields,
+        "info_complete": state["info_complete"],
+        "current_state": {k: state.get(k) for k in required_fields}
+    })
+    
     state["current_node"] = "analyze_conversation"
     return state
 
+
 def normalize_info_node(state: FlightSearchState) -> FlightSearchState:
-    """Normalize extracted information for Amadeus API format"""
-    
-    # Airport code mapping
-    airport_mappings = {
-        'new york': 'NYC', 'nyc': 'NYC', 'new york city': 'NYC',
-        'los angeles': 'LAX', 'la': 'LAX',
-        'chicago': 'CHI', 'london': 'LON', 'paris': 'PAR',
-        'tokyo': 'TYO', 'dubai': 'DXB', 'amsterdam': 'AMS',
-        'frankfurt': 'FRA', 'madrid': 'MAD', 'rome': 'ROM',
-        'barcelona': 'BCN', 'milan': 'MIL', 'zurich': 'ZUR',
-        'vienna': 'VIE', 'munich': 'MUC', 'berlin': 'BER',
-        'istanbul': 'IST', 'cairo': 'CAI', 'doha': 'DOH',
-        'singapore': 'SIN', 'hong kong': 'HKG', 'bangkok': 'BKK',
-        'sydney': 'SYD', 'melbourne': 'MEL', 'toronto': 'YYZ',
-        'vancouver': 'YVR', 'montreal': 'YUL', 'mexico city': 'MEX',
-        'sao paulo': 'SAO', 'rio de janeiro': 'RIO', 'buenos aires': 'BUE'
-    }
+    """Normalize extracted information for Amadeus API format using LLM for intelligent mapping."""
+    try:
+        (state.setdefault("node_trace", [])).append("normalize_info")
+    except Exception:
+        pass
     
     def normalize_location_to_airport_code(location: str) -> str:
-        """Convert city name to airport code using mapping, optionally LLM if available."""
-        location_lower = location.lower().strip()
-        
-        # Check direct mapping first
-        if location_lower in airport_mappings:
-            return airport_mappings[location_lower]
-        
+        """Convert city name to airport code using LLM for intelligent mapping."""
+        if not location:
+            return ""
+            
         # If already looks like airport code (3 letters), return as is
         if len(location.strip()) == 3 and location.isalpha():
             return location.upper()
         
-        # Optionally try LLM if configured
-        if os.getenv("OPENAI_API_KEY"):
-            airport_prompt = f"""Convert this city or location to its primary airport code: "{location}"
+        try:
+            if os.getenv("OPENAI_API_KEY"):
+                airport_prompt = f"""Convert this city or location to its primary IATA airport code: "{location}"
 
-Return only the 3-letter IATA airport code (like LAX, JFK, LHR). 
-If the location has multiple airports, return the main international airport code.
-If you're unsure, return your best guess for the main airport code.
+Rules:
+- Return ONLY the 3-letter IATA airport code
+- For cities with multiple airports, return the main international airport
+- Examples: "New York" → "JFK", "Los Angeles" → "LAX", "London" → "LHR", "Paris" → "CDG"
 
-Examples:
-- New York -> JFK
-- Los Angeles -> LAX  
-- London -> LHR
-- Paris -> CDG
-- Dubai -> DXB
-
-Just return the 3-letter code, nothing else."""
-            try:
+Airport code:"""
+                
                 airport_response = get_llm().invoke([HumanMessage(content=airport_prompt)])
                 airport_code = airport_response.content.strip().upper()
-                if len(airport_code) == 3 and airport_code.isalpha():
-                    return airport_code
+                
+                # Extract 3-letter code from response
                 codes = re.findall(r'\b[A-Z]{3}\b', airport_code)
                 if codes:
                     return codes[0]
-            except Exception:
-                pass
+                elif len(airport_code) == 3 and airport_code.isalpha():
+                    return airport_code
+        except Exception as e:
+            print(f"Error getting airport code for {location}: {e}")
         
-        # Fallback: first 3 letters
+        # Fallback mappings for common cities
+        airport_mappings = {
+            'new york': 'JFK', 'nyc': 'JFK', 'new york city': 'JFK',
+            'los angeles': 'LAX', 'la': 'LAX', 'los angeles california': 'LAX',
+            'chicago': 'ORD', 'london': 'LHR', 'paris': 'CDG',
+            'tokyo': 'NRT', 'dubai': 'DXB', 'amsterdam': 'AMS',
+            'frankfurt': 'FRA', 'madrid': 'MAD', 'rome': 'FCO',
+            'barcelona': 'BCN', 'milan': 'MXP', 'zurich': 'ZUR',
+        }
+        
+        location_lower = location.lower().strip()
+        if location_lower in airport_mappings:
+            return airport_mappings[location_lower]
+        
+        # Final fallback: first 3 letters
         return location[:3].upper()
     
     def normalize_cabin_class(cabin: str) -> str:
         """Normalize cabin class to Amadeus format"""
+        if not cabin:
+            return 'ECONOMY'
+            
         cabin_lower = cabin.lower()
         if 'economy' in cabin_lower or 'eco' in cabin_lower or 'coach' in cabin_lower:
             return 'ECONOMY'
@@ -290,34 +292,25 @@ Just return the 3-letter code, nothing else."""
         else:
             return 'ECONOMY'  # Default
     
-    def normalize_trip_type(trip_type: str) -> str:
-        """Normalize trip type to Amadeus format"""
-        trip_lower = trip_type.lower()
-        if 'round' in trip_lower or 'return' in trip_lower:
-            return 'round_trip'
-        else:
-            return 'one_way'
-    
-    # Normalize each field
     try:
-        # Origin and destination airport codes
+        # Normalize airport codes
         if state.get('origin'):
             state['origin_location_code'] = normalize_location_to_airport_code(state['origin'])
+            _debug_print(f"Origin normalization", f"{state['origin']} → {state['origin_location_code']}")
         
         if state.get('destination'):
             state['destination_location_code'] = normalize_location_to_airport_code(state['destination'])
+            _debug_print(f"Destination normalization", f"{state['destination']} → {state['destination_location_code']}")
         
-        # Departure date (already in YYYY-MM-DD format from validation)
+        # Normalize other fields
         if state.get('departure_date'):
             state['normalized_departure_date'] = state['departure_date']
         
-        # Cabin class
         if state.get('cabin_class'):
             state['normalized_cabin'] = normalize_cabin_class(state['cabin_class'])
-        
-        # Trip type
-        if state.get('trip_type'):
-            state['normalized_trip_type'] = normalize_trip_type(state['trip_type'])
+            
+        # Always round trip
+        state['normalized_trip_type'] = 'round_trip'
         
         state['current_node'] = 'normalize_info'
         
@@ -328,15 +321,19 @@ Just return the 3-letter code, nothing else."""
     
     return state
 
+
 def format_body_node(state: FlightSearchState) -> FlightSearchState:
     """Format the request body for Amadeus API"""
+    try:
+        (state.setdefault("node_trace", [])).append("format_body")
+    except Exception:
+        pass
     
     def format_flight_offers_body(
         origin_location_code,
         destination_location_code,
         departure_date,
         cabin="ECONOMY",
-        trip_type="one_way",
         duration=None
     ):
         origin_destinations = [
@@ -351,8 +348,8 @@ def format_body_node(state: FlightSearchState) -> FlightSearchState:
             }
         ]
         
-        if trip_type == "round_trip" and duration is not None:
-            # Calculate return date
+        # Always add return leg for round trip
+        if duration is not None:
             dep_date = datetime.strptime(departure_date, "%Y-%m-%d")
             return_date = (dep_date + timedelta(days=int(duration))).strftime("%Y-%m-%d")
             origin_destinations.append({
@@ -376,7 +373,7 @@ def format_body_node(state: FlightSearchState) -> FlightSearchState:
             ],
             "sources": ["GDS"],
             "searchCriteria": {
-                "maxFlightOffers": 5,  # Get more options
+                "maxFlightOffers": 5,
                 "flightFilters": {
                     "cabinRestrictions": [
                         {
@@ -395,17 +392,22 @@ def format_body_node(state: FlightSearchState) -> FlightSearchState:
         destination_location_code=state.get("destination_location_code"),
         departure_date=state.get("normalized_departure_date"),
         cabin=state.get("normalized_cabin", "ECONOMY"),
-        trip_type=state.get("normalized_trip_type", "one_way"),
         duration=state.get("duration")
     )
 
-    _debug_print("Amadeus request body (flight-offers)", state.get("body"))
+    _debug_print("Amadeus request body", state.get("body"))
     
     state["current_node"] = "format_body"
     return state
 
+
 def get_access_token_node(state: FlightSearchState) -> FlightSearchState:
     """Get access token from Amadeus API"""
+    try:
+        (state.setdefault("node_trace", [])).append("get_auth")
+    except Exception:
+        pass
+        
     url = "https://test.api.amadeus.com/v1/security/oauth2/token"
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     data = {
@@ -431,8 +433,14 @@ def get_access_token_node(state: FlightSearchState) -> FlightSearchState:
     
     return state
 
+
 def get_flight_offers_node(state: FlightSearchState) -> FlightSearchState:
-    """Get flight offers from Amadeus API for a 3-day window (input date + 2 days) in parallel."""
+    """Get flight offers from Amadeus API for a 3-day window in parallel."""
+    try:
+        (state.setdefault("node_trace", [])).append("search_flights")
+    except Exception:
+        pass
+        
     base_url = "https://test.api.amadeus.com/v2/shopping/flight-offers"
     headers = {
         "Authorization": f"Bearer {state['access_token']}",
@@ -449,23 +457,28 @@ def get_flight_offers_node(state: FlightSearchState) -> FlightSearchState:
         start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
     except Exception:
         state["needs_followup"] = True
-        state["followup_question"] = "Please provide a valid departure date (e.g., 2025-12-25)."
+        state["followup_question"] = "Please provide a valid departure date."
         return state
 
     if DEBUG:
         print("[DEBUG] Amadeus flight-offers: connecting…")
 
-    # Prepare 3 request bodies (D, D+1, D+2)
+    # Search 3-day window: departure date + 2 days
     bodies = []
     for day_offset in range(0, 3):
         query_date = (start_date + timedelta(days=day_offset)).strftime("%Y-%m-%d")
         body = dict(state["body"]) if state.get("body") else {}
+        
         if body.get("originDestinations"):
+            # Update departure date
             body["originDestinations"][0]["departureDateTimeRange"]["date"] = query_date
-            if len(body["originDestinations"]) > 1 and state.get("duration") is not None:
+            
+            # Update return date if round trip
+            if len(body["originDestinations"]) > 1 and state.get("duration"):
                 dep_date_dt = datetime.strptime(query_date, "%Y-%m-%d")
                 return_date = (dep_date_dt + timedelta(days=int(state.get("duration", 0)))).strftime("%Y-%m-%d")
                 body["originDestinations"][1]["departureDateTimeRange"]["date"] = return_date
+        
         body.setdefault("searchCriteria", {}).setdefault("maxFlightOffers", 5)
         bodies.append((query_date, body))
 
@@ -485,6 +498,7 @@ def get_flight_offers_node(state: FlightSearchState) -> FlightSearchState:
             print(f"Error getting flight offers for {day}: {exc}")
             return []
 
+    # Parallel search across 3 days
     with ThreadPoolExecutor(max_workers=3) as executor:
         futures = [executor.submit(fetch_for_day, b) for b in bodies]
         for fut in as_completed(futures):
@@ -493,12 +507,17 @@ def get_flight_offers_node(state: FlightSearchState) -> FlightSearchState:
     state["result"] = {"data": all_results}
     state["current_node"] = "search_flights"
     if DEBUG:
-        print("[DEBUG] Amadeus flight-offers: connected ✔")
+        print(f"[DEBUG] Amadeus flight-offers: found {len(all_results)} flights ✔")
     return state
 
+
 def display_results_node(state: FlightSearchState) -> FlightSearchState:
-    """Format flight results for display with outbound and return legs and search date."""
-    
+    """Format flight results for display with outbound and return legs."""
+    try:
+        (state.setdefault("node_trace", [])).append("display_results")
+    except Exception:
+        pass
+
     def format_duration(duration_str):
         if not duration_str or not duration_str.startswith('PT'):
             return duration_str
@@ -532,17 +551,20 @@ def display_results_node(state: FlightSearchState) -> FlightSearchState:
 
     def build_leg(itinerary) -> Dict[str, Any]:
         segments = itinerary.get("segments", [])
-        layovers = []
         if not segments:
             return None
+            
+        layovers = []
         for i in range(len(segments) - 1):
             arr = segments[i].get("arrival", {})
             dep = segments[i+1].get("departure", {})
             layovers.append(f"{arr.get('iataCode','N/A')} {format_time(arr.get('at',''))} → {format_time(dep.get('at',''))}")
+            
         first_segment = segments[0]
         last_segment = segments[-1]
         departure = first_segment.get("departure", {})
         arrival = last_segment.get("arrival", {})
+        
         return {
             "airline": first_segment.get("carrierCode", "N/A"),
             "flight_number": first_segment.get("number", "N/A"),
@@ -568,9 +590,11 @@ def display_results_node(state: FlightSearchState) -> FlightSearchState:
             itineraries = flight.get("itineraries", [])
             if not itineraries:
                 continue
+                
             outbound_leg = build_leg(itineraries[0])
             return_leg = build_leg(itineraries[1]) if len(itineraries) > 1 else None
             price = flight.get("price", {})
+            
             formatted.append({
                 "price": price.get("total", "N/A"),
                 "currency": price.get("currency", "USD"),
@@ -579,6 +603,8 @@ def display_results_node(state: FlightSearchState) -> FlightSearchState:
                 "return_leg": return_leg,
             })
 
+        # Sort by price
+        formatted.sort(key=lambda x: float(x["price"]) if x["price"] != "N/A" else float('inf'))
         state["formatted_results"] = formatted
         state["current_node"] = "display_results"
 
@@ -590,50 +616,64 @@ def display_results_node(state: FlightSearchState) -> FlightSearchState:
     
     return state
 
+
 def summarize_node(state: FlightSearchState) -> FlightSearchState:
-    """Generate LLM summary and recommendation (optional if LLM configured)."""
+    """Generate LLM summary and recommendation."""
+    try:
+        (state.setdefault("node_trace", [])).append("summarize")
+    except Exception:
+        pass
     
-    summary_prompt = f"""You are a helpful travel assistant. Based on the flight search results, provide a concise summary and recommendation.
+    try:
+        if not state.get("formatted_results") or not os.getenv("OPENAI_API_KEY"):
+            state["summary"] = "Here are your flight options:"
+            state["current_node"] = "summarize"
+            return state
+        
+        summary_prompt = f"""You are a helpful travel assistant. Based on the flight search results, provide a concise, friendly summary and recommendation.
 
 Search Details:
 - From: {state.get('origin', 'N/A')} ({state.get('origin_location_code', 'N/A')})
 - To: {state.get('destination', 'N/A')} ({state.get('destination_location_code', 'N/A')})
 - Date: {state.get('departure_date', 'N/A')}
 - Cabin: {state.get('cabin_class', 'N/A')}
-- Trip Type: {state.get('trip_type', 'N/A')}
 - Duration: {state.get('duration', 'N/A')} days
 
-Found {len(state.get('formatted_results', []))} flight options.
+Found {len(state.get('formatted_results', []))} flight options across 3 days.
 
-Flight Results Summary:
-{json.dumps(state.get('formatted_results', []), indent=2)}
+Flight Results (sorted by price):
+{json.dumps(state.get('formatted_results', [])[:3], indent=2)}
 
 Please provide:
-1. A brief summary of the search results
-2. Your recommendation on the best option(s)
+1. A brief, enthusiastic summary of the search results
+2. Your recommendation for the best option(s) considering price, timing, and convenience
 3. Any helpful travel tips or considerations
-4. Mention if there are any potential issues (long layovers, very early/late flights, etc.)
+4. Mention any concerns (long layovers, very early/late flights, etc.)
 
-Keep your response conversational and helpful, limit to 2-3 paragraphs."""
+Keep it conversational, helpful, and limit to 2-3 paragraphs. Start with something like "Great! I found several flight options for your trip..."
+"""
 
-    try:
-        if state.get("formatted_results") and len(state.get("formatted_results", [])) > 0 and os.getenv("OPENAI_API_KEY"):
-            summary_response = get_llm().invoke([HumanMessage(content=summary_prompt)])
-            state["summary"] = summary_response.content
-        else:
-            state["summary"] = state.get("summary") or "Here are your flight options."
-
-        state["current_node"] = "summarize"
+        summary_response = get_llm().invoke([HumanMessage(content=summary_prompt)])
+        state["summary"] = summary_response.content
         
     except Exception as e:
         print(f"Error generating summary: {e}")
-        state["summary"] = "I found your flights but had trouble generating the summary."
+        state["summary"] = "Great! I found your flight options. Here are the details:"
     
+    state["current_node"] = "summarize"
     return state
 
+
+# Legacy nodes for backward compatibility
+def analyze_conversation_node_legacy(state: FlightSearchState) -> FlightSearchState:
+    """Legacy analyze conversation node - now just calls the new llm_conversation logic"""
+    return analyze_conversation_node(state)
+
 def generate_followup_node(state: FlightSearchState) -> FlightSearchState:
-    """Generate follow-up question when information is incomplete"""
-    # This node is mainly for flow control
-    # The actual question generation happens in analyze_conversation_node
+    """Generate follow-up question - mostly handled by LLM conversation node now"""
+    try:
+        (state.setdefault("node_trace", [])).append("generate_followup")
+    except Exception:
+        pass
     state["current_node"] = "generate_followup"
     return state

@@ -35,6 +35,8 @@ class FlightSearchState(TypedDict):
     needs_followup: bool
     followup_question: Optional[str]
     current_node: str
+    # Debug trace of nodes visited
+    node_trace: Optional[List[str]]
 
 # API Request/Response Models
 class Message(BaseModel):
@@ -78,3 +80,4 @@ class ChatResponse(BaseModel):
     flights: Optional[List[FlightResult]] = None
     summary: Optional[str] = None
     error_code: Optional[str] = None
+    debug_trace: Optional[List[str]] = None

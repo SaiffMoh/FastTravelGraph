@@ -52,7 +52,10 @@ def print_grouped_tables(flights: List[Dict[str, Any]]):
 
     for day in sorted(by_day.keys()):
         print(f"\n=== Offers for {day} ===")
-        header = ["Price", "Curr", "Leg", "Airline", "Number", "From", "To", "Dep", "Arr", "Dur", "Stops", "Layovers"]
+        header = [
+            "Price", "Curr", "Leg", "Airline", "Number",
+            "From", "To", "Dep", "Arr", "Dur", "Stops", "Layovers",
+        ]
         print(tab_row(header))
         print("-" * 120)
         for f in by_day[day]:
@@ -101,7 +104,8 @@ def run_auto():
         data = resp.json()
 
         rtype = data.get("response_type")
-        print(f"\nStep {step} -> response_type={rtype}")
+        trace = data.get("debug_trace") or []
+        print(f"\nStep {step} -> response_type={rtype}  nodes={trace}")
 
         assistant_message = data.get("message", "")
         print("Assistant:", assistant_message)
@@ -170,7 +174,10 @@ def run_interactive():
             conversation_history.append({"role": "assistant", "content": assistant_message})
 
             rtype = data.get("response_type")
+            trace = data.get("debug_trace") or []
             print("Assistant:", assistant_message)
+            if trace:
+                print("Nodes:", trace)
 
             if rtype == "results":
                 flights = data.get("flights", [])

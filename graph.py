@@ -3,6 +3,7 @@ from models import FlightSearchState, Message
 from typing import List
 
 from nodes import (
+    llm_conversation_node,
     analyze_conversation_node,
     normalize_info_node,
     format_body_node,
@@ -10,34 +11,32 @@ from nodes import (
     get_flight_offers_node,
     display_results_node,
     summarize_node,
-    generate_followup_node
 )
 
 
 def check_info_complete(state: FlightSearchState) -> str:
     """Decide next step based on collected info without mutating state."""
-    # If we have all info, proceed
+    # If we have all info, proceed to search
     if state.get("info_complete", False):
         return "normalize_info"
-    # Otherwise, ask a follow-up and end this turn
+    # Otherwise, end this turn and wait for more user input
     return "ask_followup"
-
 
 
 def check_api_success(state: FlightSearchState) -> str:
     """Check if API calls were successful"""
     if state.get("needs_followup", False):
         return "generate_followup"
-
     return "continue"
 
+
 def create_flight_search_graph():
-    """Create the LangGraph workflow for FastAPI"""
+    """Create the enhanced LangGraph workflow for intelligent flight search"""
     workflow = StateGraph(FlightSearchState)
 
     # Add nodes
+    workflow.add_node("llm_conversation", llm_conversation_node)
     workflow.add_node("analyze_conversation", analyze_conversation_node)
-    workflow.add_node("generate_followup", generate_followup_node)
     workflow.add_node("normalize_info", normalize_info_node)
     workflow.add_node("format_body", format_body_node)
     workflow.add_node("get_auth", get_access_token_node)
@@ -46,15 +45,20 @@ def create_flight_search_graph():
     workflow.add_node("summarize", summarize_node)
 
     # Add edges
-    workflow.add_edge("analyze_conversation", "generate_followup")
+    # Start with LLM conversation to handle user input intelligently
+    workflow.add_edge("llm_conversation", "analyze_conversation")
+    
+    # After analyze, if info complete proceed to search; else end this turn
     workflow.add_conditional_edges(
-        "generate_followup",
+        "analyze_conversation",
         check_info_complete,
         {
+            "normalize_info": "normalize_info",
             "ask_followup": END,
-            "normalize_info": "normalize_info"
         }
     )
+    
+    # Sequential flow for flight search process
     workflow.add_edge("normalize_info", "format_body")
     workflow.add_edge("format_body", "get_auth")
     workflow.add_edge("get_auth", "search_flights")
@@ -63,27 +67,26 @@ def create_flight_search_graph():
     workflow.add_edge("summarize", END)
 
     # Set entry point
-    workflow.set_entry_point("analyze_conversation")
+    workflow.set_entry_point("llm_conversation")
 
     return workflow
-
-from typing import Dict, Any
-from models import FlightSearchState, Message
 
 
 def initialize_state_from_request(message: str, conversation_history: List[Message]):
     """
-    Initialize a valid FlightSearchState with safe defaults.
+    Initialize a valid FlightSearchState with safe defaults for LLM-based processing.
     """
     if not conversation_history:
         conversation_history = [
             {"role": "system", "content": (
-                "You are a helpful AI travel assistant. "
-                "Your goal is to help the user find flights, "
-                "asking for any missing information politely."
+                "You are a helpful AI travel assistant specializing in flight bookings. "
+                "Your goal is to help users find the best flights by gathering their preferences "
+                "in a natural, conversational way. You can understand flexible date formats, "
+                "casual location names, and abbreviated terms. Always be friendly and efficient."
             )}
         ]
     else:
+        # Convert Message objects to dicts if needed
         conversation_history = [
             msg if isinstance(msg, dict) else {"role": msg.role, "content": msg.content}
             for msg in conversation_history
@@ -98,8 +101,16 @@ def initialize_state_from_request(message: str, conversation_history: List[Messa
         "needs_followup": True,
         "info_complete": False,
         "followup_question": None,
-        "current_node": "analyze_conversation",
+        "current_node": "llm_conversation",
         "followup_count": 0,
-        # Default to round trip
-        "trip_type": "round trip"
+        # Default to round trip (as per requirements)
+        "trip_type": "round trip",
+        # Debug trace for monitoring
+        "node_trace": [],
+        # Initialize empty fields for LLM to populate
+        "departure_date": None,
+        "origin": None,
+        "destination": None,
+        "cabin_class": None,
+        "duration": None,
     }

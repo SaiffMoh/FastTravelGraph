@@ -105,7 +105,8 @@ async def chat_endpoint(request: ChatRequest):
             return ChatResponse(
                 response_type="question",
                 message=result.get("followup_question", "Could you provide more details about your flight?"),
-                extracted_info=extracted_info
+                extracted_info=extracted_info,
+                debug_trace=result.get("node_trace")
             )
 
         # Build flight results
@@ -145,7 +146,8 @@ async def chat_endpoint(request: ChatRequest):
             message="Here are your flight options:",
             extracted_info=extracted_info,
             flights=flights,
-            summary=result.get("summary")
+            summary=result.get("summary"),
+            debug_trace=result.get("node_trace")
         )
 
     except HTTPException:
