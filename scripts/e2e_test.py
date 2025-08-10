@@ -88,10 +88,11 @@ def print_flight_offers_table(all_offers: List[Dict[str, Any]]):
         return
     
     print("\n=== Flight Offers Available ===")
+    print(f"Total offers: {len(all_offers)} (Cheapest offer per day)")
     
     # Create table headers
     headers = ["Offer ID", "Day Type", "Price", "Date", "Outbound", "Return", "Duration", "Stops"]
-    col_widths = [12, 15, 15, 12, 25, 25, 15, 10]
+    col_widths = [12, 20, 15, 12, 25, 25, 15, 10]
     
     # Print header
     header_row = " | ".join(h.ljust(w) for h, w in zip(headers, col_widths))
@@ -102,7 +103,13 @@ def print_flight_offers_table(all_offers: List[Dict[str, Any]]):
     for offer in all_offers:
         offer_id = offer.get("offer_id", "N/A")
         day_type = offer.get("day_type", "unknown")
-        day_label = "🌟 SELECTED" if day_type == "selected" else f"📅 Alt {offer.get('date', 'N/A')}"
+        
+        # Create clear day labels
+        if day_type == "selected":
+            day_label = "🌟 SELECTED DAY"
+        else:
+            day_label = f"📅 Alternative {offer.get('date', 'N/A')}"
+        
         price = offer.get("price", "N/A")
         search_date = offer.get("search_date", "N/A")
         
@@ -147,6 +154,8 @@ def print_flight_offers_table(all_offers: List[Dict[str, Any]]):
         
         print(" | ".join(row))
         print("-" * len(header_row))
+    
+    print(f"\n💡 Tip: Select the offer that best fits your schedule and budget!")
 
 
 def run_auto():

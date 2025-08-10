@@ -463,9 +463,9 @@ def get_flight_offers_node(state: FlightSearchState) -> FlightSearchState:
     if DEBUG:
         print("[DEBUG] Amadeus flight-offers: connecting…")
 
-    # Search 3-day window: departure date + 2 days
+    # Search 5-day window: departure date + 4 days
     bodies = []
-    for day_offset in range(0, 3):
+    for day_offset in range(0, 5):
         query_date = (start_date + timedelta(days=day_offset)).strftime("%Y-%m-%d")
         body = dict(state["body"]) if state.get("body") else {}
         
@@ -666,7 +666,12 @@ Keep it conversational, helpful, and limit to 2-3 paragraphs. Start with somethi
 
 
 def select_flight_offer_node(state: FlightSearchState) -> FlightSearchState:
-    """Allow user to select a specific flight offer from the displayed results."""
+    """Allow user to select a specific flight offer from the displayed results.
+    
+    This node processes flight offers that were fetched from the Amadeus API in the 
+    get_flight_offers_node. It groups offers by date, finds the cheapest offer for 
+    each date, and presents them to the user for selection.
+    """
     try:
         (state.setdefault("node_trace", [])).append("select_flight_offer")
     except Exception:
@@ -682,7 +687,6 @@ def select_flight_offer_node(state: FlightSearchState) -> FlightSearchState:
         
         # Group offers by date and find the cheapest for each date
         from collections import defaultdict
-        from datetime import datetime, timedelta
         
         # Group offers by date
         offers_by_date = defaultdict(list)
@@ -691,26 +695,35 @@ def select_flight_offer_node(state: FlightSearchState) -> FlightSearchState:
             if search_date:
                 offers_by_date[search_date].append(offer)
         
+        # Debug: Show what we found
+        print(f"[DEBUG] Found offers for {len(offers_by_date)} different dates")
+        for date, offers in offers_by_date.items():
+            print(f"[DEBUG] Date {date}: {len(offers)} offers, prices: {[o.get('price') for o in offers[:3]]}")
+        
         # Find the cheapest offer for each date
         cheapest_by_date = {}
         for date, offers in offers_by_date.items():
             # Sort by price and take the cheapest
-            sorted_offers = sorted(offers, key=lambda x: float(x.get("price", 0)) if x.get("price") != "N/A" else float('inf'))
-            if sorted_offers:
+            valid_offers = [o for o in offers if o.get("price") != "N/A" and o.get("price") is not None]
+            if valid_offers:
+                sorted_offers = sorted(valid_offers, key=lambda x: float(x.get("price", 0)))
                 cheapest_by_date[date] = sorted_offers[0]
+                print(f"[DEBUG] Cheapest for {date}: {sorted_offers[0].get('price')}")
+            else:
+                print(f"[DEBUG] No valid offers for {date}")
         
-        # Sort dates to find the selected day and next 3 days
+        # Sort dates to find the selected day and next 4 days
         sorted_dates = sorted(cheapest_by_date.keys())
         if not sorted_dates:
             state["needs_followup"] = True
             state["followup_question"] = "No valid flight dates found. Please try a new search."
             return state
         
-        # Get the selected day (first date) and next 3 days
+        # Get the selected day (first date) and up to 4 next days
         selected_day = sorted_dates[0]
-        next_3_days = sorted_dates[1:4]  # Take up to 3 next days
+        next_days = sorted_dates[1:5]  # Take up to 4 next days
         
-        # Create the final offers list: selected day first, then next 3 days
+        # Create the final offers list: selected day first, then next days
         final_offers = []
         
         # Add cheapest offer for selected day
@@ -725,8 +738,8 @@ def select_flight_offer_node(state: FlightSearchState) -> FlightSearchState:
                 "day_type": "selected"
             })
         
-        # Add cheapest offer for each of the next 3 days
-        for i, date in enumerate(next_3_days, 2):
+        # Add cheapest offer for each of the next days
+        for i, date in enumerate(next_days, 2):
             offer = cheapest_by_date[date]
             offer_id = f"OFFER_{i:03d}"
             final_offers.append({
@@ -741,7 +754,7 @@ def select_flight_offer_node(state: FlightSearchState) -> FlightSearchState:
         state["all_offers"] = final_offers
         
         # Create a comprehensive selection prompt with all flight details
-        selection_prompt = "Here are your flight options with the cheapest offer for each available date:\n\n"
+        selection_prompt = f"Here are your flight options with the cheapest offer for each available date ({len(final_offers)} options):\n\n"
         
         for offer_data in final_offers:
             details = offer_data["display_details"]
