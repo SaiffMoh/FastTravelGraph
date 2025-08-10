@@ -90,8 +90,8 @@ def print_flight_offers_table(all_offers: List[Dict[str, Any]]):
     print("\n=== Flight Offers Available ===")
     
     # Create table headers
-    headers = ["Offer ID", "Price", "Date", "Outbound", "Return", "Duration", "Stops"]
-    col_widths = [12, 15, 12, 25, 25, 15, 10]
+    headers = ["Offer ID", "Day Type", "Price", "Date", "Outbound", "Return", "Duration", "Stops"]
+    col_widths = [12, 15, 15, 12, 25, 25, 15, 10]
     
     # Print header
     header_row = " | ".join(h.ljust(w) for h, w in zip(headers, col_widths))
@@ -101,6 +101,8 @@ def print_flight_offers_table(all_offers: List[Dict[str, Any]]):
     # Print each offer as a row
     for offer in all_offers:
         offer_id = offer.get("offer_id", "N/A")
+        day_type = offer.get("day_type", "unknown")
+        day_label = "🌟 SELECTED" if day_type == "selected" else f"📅 Alt {offer.get('date', 'N/A')}"
         price = offer.get("price", "N/A")
         search_date = offer.get("search_date", "N/A")
         
@@ -134,12 +136,13 @@ def print_flight_offers_table(all_offers: List[Dict[str, Any]]):
         # Create the row
         row = [
             offer_id.ljust(col_widths[0]),
-            str(price).ljust(col_widths[1]),
-            str(search_date).ljust(col_widths[2]),
-            outbound_str.ljust(col_widths[3]),
-            return_str.ljust(col_widths[4]),
-            duration_str.ljust(col_widths[5]),
-            stops_str.ljust(col_widths[6])
+            day_label.ljust(col_widths[1]),
+            str(price).ljust(col_widths[2]),
+            str(search_date).ljust(col_widths[3]),
+            outbound_str.ljust(col_widths[4]),
+            return_str.ljust(col_widths[5]),
+            duration_str.ljust(col_widths[6]),
+            stops_str.ljust(col_widths[7])
         ]
         
         print(" | ".join(row))

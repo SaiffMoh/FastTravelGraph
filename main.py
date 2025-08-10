@@ -4,7 +4,7 @@ import os
 from dotenv import load_dotenv
 from langgraph.errors import GraphRecursionError
 
-from models import ChatRequest, ChatResponse, ExtractedInfo, FlightResult
+from models import ChatRequest, ChatResponse, ExtractedInfo, FlightResult, DetailedOffer
 from graph import create_flight_search_graph, initialize_state_from_request
 
 # Load environment variables
@@ -110,13 +110,14 @@ async def chat_endpoint(request: ChatRequest):
                 
                 for offer_data in all_offers:
                     details = offer_data.get("display_details", {})
-                    detailed_offer = {
-                        "offer_id": details.get("offer_id"),
-                        "price": details.get("price"),
-                        "search_date": details.get("search_date"),
-                        "outbound_details": details.get("outbound_details", {}),
-                        "return_details": details.get("return_details")
-                    }
+                    detailed_offer = DetailedOffer(
+                        offer_id=details.get("offer_id"),
+                        day_type=offer_data.get("day_type", "unknown"),
+                        price=details.get("price"),
+                        search_date=details.get("search_date"),
+                        outbound_details=details.get("outbound_details", {}),
+                        return_details=details.get("return_details")
+                    )
                     detailed_offers.append(detailed_offer)
                 
                 return ChatResponse(

@@ -81,6 +81,14 @@ class FlightResult(BaseModel):
     outbound: FlightLeg
     return_leg: Optional[FlightLeg] = None
 
+class DetailedOffer(BaseModel):
+    offer_id: str
+    day_type: str  # "selected" or "alternative"
+    price: str
+    search_date: str
+    outbound_details: Dict[str, Any]
+    return_details: Optional[Dict[str, Any]] = None
+
 class ChatResponse(BaseModel):
     response_type: str  # "question", "results", "selection", "confirmation", or "error"
     message: str
@@ -90,7 +98,7 @@ class ChatResponse(BaseModel):
     error_code: Optional[str] = None
     debug_trace: Optional[List[str]] = None
     # Flight selection fields
-    all_offers: Optional[List[Dict[str, Any]]] = None
+    all_offers: Optional[List[DetailedOffer]] = None
     waiting_for_selection: Optional[bool] = None
     # Selected flight offer details
     selected_flight_offer_id: Optional[str] = None

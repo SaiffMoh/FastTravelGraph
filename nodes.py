@@ -680,61 +680,75 @@ def select_flight_offer_node(state: FlightSearchState) -> FlightSearchState:
             state["followup_question"] = "No flight offers available to select from. Please try a new search."
             return state
         
-        # Generate unique IDs for each offer (if not already done in display_results)
-        offers_with_ids = []
-        for i, offer in enumerate(formatted_results, 1):
-            # Use existing offer_id if available, otherwise generate new one
-            offer_id = offer.get("offer_id", f"OFFER_{i:03d}")
-            
-            # Format detailed flight information for display
-            outbound = offer.get("outbound", {})
-            return_leg = offer.get("return_leg")
-            
-            # Create detailed offer information
-            offer_details = {
-                "offer_id": offer_id,
-                "price": f"{offer.get('price', 'N/A')} {offer.get('currency', 'USD')}",
-                "search_date": offer.get("search_date", "N/A"),
-                "outbound_details": {
-                    "airline": outbound.get("airline", "N/A"),
-                    "flight_number": outbound.get("flight_number", "N/A"),
-                    "route": f"{outbound.get('departure_airport', 'N/A')} → {outbound.get('arrival_airport', 'N/A')}",
-                    "times": f"{outbound.get('departure_time', 'N/A')} - {outbound.get('arrival_time', 'N/A')}",
-                    "duration": outbound.get("duration", "N/A"),
-                    "stops": f"{outbound.get('stops', 0)} stop(s)",
-                    "layovers": outbound.get("layovers", [])
-                }
-            }
-            
-            # Add return leg details if it's a round trip
-            if return_leg:
-                offer_details["return_details"] = {
-                    "airline": return_leg.get("airline", "N/A"),
-                    "flight_number": return_leg.get("flight_number", "N/A"),
-                    "route": f"{return_leg.get('departure_airport', 'N/A')} → {return_leg.get('arrival_airport', 'N/A')}",
-                    "times": f"{return_leg.get('departure_time', 'N/A')} - {return_leg.get('arrival_time', 'N/A')}",
-                    "duration": return_leg.get("duration", "N/A"),
-                    "stops": f"{return_leg.get('stops', 0)} stop(s)",
-                    "layovers": return_leg.get("layovers", [])
-                }
-            
-            offer_with_id = {
+        # Group offers by date and find the cheapest for each date
+        from collections import defaultdict
+        from datetime import datetime, timedelta
+        
+        # Group offers by date
+        offers_by_date = defaultdict(list)
+        for offer in formatted_results:
+            search_date = offer.get("search_date")
+            if search_date:
+                offers_by_date[search_date].append(offer)
+        
+        # Find the cheapest offer for each date
+        cheapest_by_date = {}
+        for date, offers in offers_by_date.items():
+            # Sort by price and take the cheapest
+            sorted_offers = sorted(offers, key=lambda x: float(x.get("price", 0)) if x.get("price") != "N/A" else float('inf'))
+            if sorted_offers:
+                cheapest_by_date[date] = sorted_offers[0]
+        
+        # Sort dates to find the selected day and next 3 days
+        sorted_dates = sorted(cheapest_by_date.keys())
+        if not sorted_dates:
+            state["needs_followup"] = True
+            state["followup_question"] = "No valid flight dates found. Please try a new search."
+            return state
+        
+        # Get the selected day (first date) and next 3 days
+        selected_day = sorted_dates[0]
+        next_3_days = sorted_dates[1:4]  # Take up to 3 next days
+        
+        # Create the final offers list: selected day first, then next 3 days
+        final_offers = []
+        
+        # Add cheapest offer for selected day
+        if selected_day in cheapest_by_date:
+            offer = cheapest_by_date[selected_day]
+            offer_id = f"OFFER_001"
+            final_offers.append({
                 "offer_id": offer_id,
                 "offer": offer,
-                "date": offer.get("search_date", "N/A"),
-                "display_details": offer_details
-            }
-            offers_with_ids.append(offer_with_id)
+                "date": selected_day,
+                "display_details": _create_offer_details(offer, offer_id),
+                "day_type": "selected"
+            })
+        
+        # Add cheapest offer for each of the next 3 days
+        for i, date in enumerate(next_3_days, 2):
+            offer = cheapest_by_date[date]
+            offer_id = f"OFFER_{i:03d}"
+            final_offers.append({
+                "offer_id": offer_id,
+                "offer": offer,
+                "date": date,
+                "display_details": _create_offer_details(offer, offer_id),
+                "day_type": "alternative"
+            })
         
         # Store all offers with IDs for later selection
-        state["all_offers"] = offers_with_ids
+        state["all_offers"] = final_offers
         
         # Create a comprehensive selection prompt with all flight details
-        selection_prompt = "Here are your flight options with detailed information:\n\n"
+        selection_prompt = "Here are your flight options with the cheapest offer for each available date:\n\n"
         
-        for offer_data in offers_with_ids:
+        for offer_data in final_offers:
             details = offer_data["display_details"]
-            selection_prompt += f"**{details['offer_id']}** - {details['price']}\n"
+            day_type = offer_data.get("day_type", "unknown")
+            day_label = "🌟 SELECTED DAY" if day_type == "selected" else f"📅 Alternative Day {offer_data['date']}"
+            
+            selection_prompt += f"**{details['offer_id']}** - {details['price']} ({day_label})\n"
             selection_prompt += f"  Outbound: {details['outbound_details']['airline']} {details['outbound_details']['flight_number']}\n"
             selection_prompt += f"  Route: {details['outbound_details']['route']}\n"
             selection_prompt += f"  Time: {details['outbound_details']['times']}\n"
@@ -766,6 +780,42 @@ def select_flight_offer_node(state: FlightSearchState) -> FlightSearchState:
         state["needs_followup"] = True
     
     return state
+
+
+def _create_offer_details(offer: Dict[str, Any], offer_id: str) -> Dict[str, Any]:
+    """Helper function to create detailed offer information."""
+    outbound = offer.get("outbound", {})
+    return_leg = offer.get("return_leg")
+    
+    # Create detailed offer information
+    offer_details = {
+        "offer_id": offer_id,
+        "price": f"{offer.get('price', 'N/A')} {offer.get('currency', 'USD')}",
+        "search_date": offer.get("search_date", "N/A"),
+        "outbound_details": {
+            "airline": outbound.get("airline", "N/A"),
+            "flight_number": outbound.get("flight_number", "N/A"),
+            "route": f"{outbound.get('departure_airport', 'N/A')} → {outbound.get('arrival_airport', 'N/A')}",
+            "times": f"{outbound.get('departure_time', 'N/A')} - {outbound.get('arrival_time', 'N/A')}",
+            "duration": outbound.get("duration", "N/A"),
+            "stops": f"{outbound.get('stops', 0)} stop(s)",
+            "layovers": outbound.get("layovers", [])
+        }
+    }
+    
+    # Add return leg details if it's a round trip
+    if return_leg:
+        offer_details["return_details"] = {
+            "airline": return_leg.get("airline", "N/A"),
+            "flight_number": return_leg.get("flight_number", "N/A"),
+            "route": f"{return_leg.get('departure_airport', 'N/A')} → {return_leg.get('arrival_airport', 'N/A')}",
+            "times": f"{return_leg.get('departure_time', 'N/A')} - {return_leg.get('arrival_time', 'N/A')}",
+            "duration": return_leg.get("duration", "N/A"),
+            "stops": f"{return_leg.get('stops', 0)} stop(s)",
+            "layovers": return_leg.get("layovers", [])
+        }
+    
+    return offer_details
 
 
 def process_flight_selection_node(state: FlightSearchState) -> FlightSearchState:
