@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any, Union
+from typing import List, Optional, Dict, Any, Union, TypedDict
 from datetime import datetime
 
 class Message(BaseModel):
@@ -38,59 +38,59 @@ class FlightResult(BaseModel):
     return_leg: Optional[FlightLeg] = Field(None, description="Return flight details (for round trips)")
 
 class ChatResponse(BaseModel):
-    response_type: str = Field(..., description="Type of response (question, results, error)")
-    message: str = Field(..., description="Response message to display")
-    extracted_info: Optional[ExtractedInfo] = Field(None, description="Currently extracted flight information")
-    flights: Optional[List[FlightResult]] = Field(None, description="Flight search results")
-    summary: Optional[str] = Field(None, description="AI summary of results")
-    thread_id: str = Field(..., description="Thread ID for this conversation")
-    debug_trace: Optional[List[str]] = Field(None, description="Debug information about processing steps")
+    # response_type: str = Field(..., description="Type of response (question, results, error)")
+    # message: str = Field(..., description="HTML-formatted response message to display")
+    html_content: str = Field(..., description="Full HTML content for frontend display")
+    # extracted_info: Optional[ExtractedInfo] = Field(None, description="Currently extracted flight information")
+    # flights: Optional[List[FlightResult]] = Field(None, description="Flight search results")
+    # summary: Optional[str] = Field(None, description="AI summary of results")
+    # thread_id: str = Field(..., description="Thread ID for this conversation")
+    # debug_trace: Optional[List[str]] = Field(None, description="Debug information about processing steps")
 
-# Internal state model for LangGraph
-class FlightSearchState(BaseModel):
-    class Config:
-        arbitrary_types_allowed = True
-    
+# Internal state model for LangGraph - using TypedDict for better compatibility
+from typing import TypedDict
+
+class FlightSearchState(TypedDict, total=False):
     # Thread management
-    thread_id: Optional[str] = None
+    thread_id: str
     
     # Conversation tracking
-    conversation: List[Dict[str, Any]] = Field(default_factory=list)
-    current_message: str = ""
+    conversation: List[Dict[str, Any]]
+    current_message: str
     
     # Extracted information
-    departure_date: Optional[str] = None
-    origin: Optional[str] = None
-    destination: Optional[str] = None
-    cabin_class: Optional[str] = None
-    trip_type: Optional[str] = "round trip"  # Default to round trip
-    duration: Optional[int] = None
+    departure_date: Optional[str]
+    origin: Optional[str]
+    destination: Optional[str]
+    cabin_class: Optional[str]
+    trip_type: str  # Default to round trip
+    duration: Optional[int]
     
     # Normalized information for API calls
-    origin_location_code: Optional[str] = None
-    destination_location_code: Optional[str] = None
-    normalized_departure_date: Optional[str] = None
-    normalized_cabin: Optional[str] = None
-    normalized_trip_type: Optional[str] = None
+    origin_location_code: Optional[str]
+    destination_location_code: Optional[str]
+    normalized_departure_date: Optional[str]
+    normalized_cabin: Optional[str]
+    normalized_trip_type: Optional[str]
     
     # API request data
-    body: Optional[Dict[str, Any]] = None
-    access_token: Optional[str] = None
+    body: Optional[Dict[str, Any]]
+    access_token: Optional[str]
     
     # Results
-    result: Optional[Dict[str, Any]] = None
-    formatted_results: Optional[List[Dict[str, Any]]] = None
-    summary: Optional[str] = None
+    result: Optional[Dict[str, Any]]
+    formatted_results: Optional[List[Dict[str, Any]]]
+    summary: Optional[str]
     
     # Flow control
-    needs_followup: bool = True
-    info_complete: bool = False
-    followup_question: Optional[str] = None
-    current_node: Optional[str] = None
-    followup_count: int = 0
+    needs_followup: bool
+    info_complete: bool
+    followup_question: Optional[str]
+    current_node: Optional[str]
+    followup_count: int
     
     # Debug information
-    node_trace: List[str] = Field(default_factory=list)
+    node_trace: List[str]
 
 # Conversation storage (in production, use Redis, PostgreSQL, etc.)
 class ConversationStore:

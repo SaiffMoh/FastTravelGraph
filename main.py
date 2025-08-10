@@ -3,22 +3,20 @@ from fastapi.middleware.cors import CORSMiddleware
 import os
 from dotenv import load_dotenv
 from langgraph.errors import GraphRecursionError
-from typing import List
-
+from typing import List, Optional, Any
+from html import escape
+from graph import create_flight_search_graph
 from models import (
     ChatRequest, ChatResponse, ExtractedInfo, FlightResult,
     conversation_store, FlightSearchState
 )
-from graph import create_flight_search_graph
 
-# Load environment variables
 load_dotenv()
 
 # Initialize FastAPI app
 app = FastAPI(
     title="Flight Search Chatbot API",
-    description="AI-powered flight search assistant with thread-based conversations",
-    version="2.0.0"
+    description="AI-powered flight search assistant with thread-based conversations"
 )
 
 # CORS middleware
@@ -29,6 +27,191 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+def _get(obj: Any, attr: str, default: str = "N/A") -> str:
+    """
+    Helper to retrieve attribute from objects or keys from dicts.
+    Returns default if not present or value is falsy (but not zero).
+    """
+    if obj is None:
+        return default
+    # If dict-like
+    try:
+        if isinstance(obj, dict):
+            val = obj.get(attr, default)
+            return val if val is not None else default
+    except Exception:
+        pass
+    # If object with attribute
+    try:
+        val = getattr(obj, attr)
+        return val if val is not None else default
+    except Exception:
+        return default
+
+def format_extracted_info_html(extracted_info: ExtractedInfo) -> str:
+    """Format extracted information as HTML"""
+    html = "<div class='extracted-info'><h4>📋 Current Information:</h4><ul>"
+    
+    if extracted_info.departure_date:
+        html += f"<li><strong>Departure Date:</strong> {extracted_info.departure_date}</li>"
+    if extracted_info.origin:
+        html += f"<li><strong>From:</strong> {extracted_info.origin}</li>"
+    if extracted_info.destination:
+        html += f"<li><strong>To:</strong> {extracted_info.destination}</li>"
+    if extracted_info.cabin_class:
+        html += f"<li><strong>Cabin:</strong> {extracted_info.cabin_class.title()}</li>"
+    if extracted_info.duration:
+        html += f"<li><strong>Duration:</strong> {extracted_info.duration} days</li>"
+    
+    html += "</ul></div>"
+    return html
+
+def format_flights_html(flights: List[Any], summary: Optional[str] = None) -> str:
+    """
+    Build HTML string containing a table with flight rows then the summary text below.
+    `flights` can be list of objects (with attributes) or dicts.
+    """
+    if not flights:
+        return "<div>No flights found for your criteria.</div>"
+
+    style = (
+        "<style>"
+        "table.flight-table{width:100%;border-collapse:collapse;font-family:Arial,Helvetica,sans-serif}"
+        "table.flight-table th, table.flight-table td{border:1px solid #ddd;padding:8px;text-align:left;}"
+        "table.flight-table th{font-weight:600}"
+        ".summary-block{margin-top:12px;padding:10px;border:1px solid #eee;font-family:Arial,Helvetica,sans-serif}"
+        "</style>"
+    )
+
+    # Table header
+    html = style
+
+    # Table header
+    html = "<table class='flight-table'>"
+    html += (
+        "<thead>"
+        "<tr>"
+        "<th>#</th>"
+        "<th>Outbound (airline / flight)</th>"
+        "<th>Outbound route & times</th>"
+        "<th>Outbound duration / stops</th>"
+        "<th>Return (airline / flight)</th>"
+        "<th>Return route & times</th>"
+        "<th>Return duration / stops</th>"
+        "<th>Price</th>"
+        "<th>Search date</th>"
+        "</tr>"
+        "</thead><tbody>"
+    )
+
+    for i, flight in enumerate(flights, start=1):
+        # Outbound fields
+        out = _get(flight, "outbound", {})
+        out_airline = _get(out, "airline")
+        out_flight_no = _get(out, "flight_number")
+        out_dep = _get(out, "departure_airport")
+        out_arr = _get(out, "arrival_airport")
+        out_dep_time = _get(out, "departure_time")
+        out_arr_time = _get(out, "arrival_time")
+        out_duration = _get(out, "duration")
+        out_stops = _get(out, "stops", "0")
+        out_layovers = _get(out, "layovers", [])
+        if isinstance(out_layovers, (list, tuple)):
+            out_layovers_display = ", ".join(map(str, out_layovers)) if out_layovers else ""
+        else:
+            out_layovers_display = str(out_layovers)
+
+        # Return fields
+        ret = _get(flight, "return_leg", {}) or _get(flight, "return", {})
+        ret_airline = _get(ret, "airline")
+        ret_flight_no = _get(ret, "flight_number")
+        ret_dep = _get(ret, "departure_airport")
+        ret_arr = _get(ret, "arrival_airport")
+        ret_dep_time = _get(ret, "departure_time")
+        ret_arr_time = _get(ret, "arrival_time")
+        ret_duration = _get(ret, "duration")
+        ret_stops = _get(ret, "stops", "0")
+        ret_layovers = _get(ret, "layovers", [])
+        if isinstance(ret_layovers, (list, tuple)):
+            ret_layovers_display = ", ".join(map(str, ret_layovers)) if ret_layovers else ""
+        else:
+            ret_layovers_display = str(ret_layovers)
+
+        # Price and search date
+        price = _get(flight, "price", "N/A")
+        currency = _get(flight, "currency", "")
+        price_display = f"{escape(str(currency))} {escape(str(price))}" if price != "N/A" else "Price not available"
+        search_date = _get(flight, "search_date", "")
+
+        # Build HTML-safe strings
+        out_header = f"{escape(str(out_airline))} {escape(str(out_flight_no))}"
+        out_route = f"{escape(str(out_dep))} {escape(str(out_dep_time))} → {escape(str(out_arr))} {escape(str(out_arr_time))}"
+        out_details = f"{escape(str(out_duration))}"
+        if out_stops not in (None, "", "0"):
+            out_details += f" / {escape(str(out_stops))} stop(s)"
+            if out_layovers_display:
+                out_details += f" ({escape(out_layovers_display)})"
+
+        ret_header = f"{escape(str(ret_airline))} {escape(str(ret_flight_no))}" if ret_airline != "N/A" else "—"
+        ret_route = f"{escape(str(ret_dep))} {escape(str(ret_dep_time))} → {escape(str(ret_arr))} {escape(str(ret_arr_time))}" if ret_airline != "N/A" else "—"
+        ret_details = f"{escape(str(ret_duration))}"
+        if ret_stops not in (None, "", "0"):
+            ret_details += f" / {escape(str(ret_stops))} stop(s)"
+            if ret_layovers_display:
+                ret_details += f" ({escape(ret_layovers_display)})"
+
+        html += (
+            "<tr>"
+            f"<td>{i}</td>"
+            f"<td>{out_header}</td>"
+            f"<td>{out_route}</td>"
+            f"<td>{out_details}</td>"
+            f"<td>{ret_header}</td>"
+            f"<td>{ret_route}</td>"
+            f"<td>{ret_details}</td>"
+            f"<td>{price_display}</td>"
+            f"<td>{escape(str(search_date))}</td>"
+            "</tr>"
+        )
+
+    html += "</tbody></table>"
+
+    # Append summary text after the table
+    if summary:
+        html += f"<div class='summary-block'>{escape(str(summary))}</div>"
+
+    return html
+
+def format_question_html(question: str, extracted_info: ExtractedInfo) -> str:
+    """Format follow-up question with current info as HTML"""
+    html = f"<div class='question-response'>"
+    html += f"<div class='question'>"
+    html += f"<p>{question}</p>"
+    html += f"</div>"
+    
+    # Show current progress
+    info_items = []
+    if extracted_info.departure_date:
+        info_items.append(f"📅 {extracted_info.departure_date}")
+    if extracted_info.origin:
+        info_items.append(f"🛫 From {extracted_info.origin}")
+    if extracted_info.destination:
+        info_items.append(f"🛬 To {extracted_info.destination}")
+    if extracted_info.cabin_class:
+        info_items.append(f"💺 {extracted_info.cabin_class.title()}")
+    if extracted_info.duration:
+        info_items.append(f"📆 {extracted_info.duration} days")
+    
+    if info_items:
+        html += f"<div class='progress'>"
+        html += f"<p><strong>Information collected:</strong></p>"
+        html += f"<p>{' • '.join(info_items)}</p>"
+        html += f"</div>"
+    
+    html += f"</div>"
+    return html
+
 
 # Compile LangGraph workflow
 graph = create_flight_search_graph().compile()
@@ -55,7 +238,7 @@ async def health():
     return {"status": "healthy", "message": "All API keys configured"}
 
 
-@app.post("/api/chat", response_model=ChatResponse)
+@app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
     """
     Handles the conversation for flight search using thread_id and user_msg.
@@ -86,20 +269,29 @@ async def chat_endpoint(request: ChatRequest):
         conversation_store.add_message(request.thread_id, "user", user_message)
         updated_conversation = conversation_store.get_conversation(request.thread_id)
 
-        # Initialize state for LangGraph
-        state = FlightSearchState(
-            thread_id=request.thread_id,
-            conversation=updated_conversation,
-            current_message=user_message,
-            needs_followup=True,
-            info_complete=False,
-            trip_type="round trip",  # Always round trip
-            node_trace=[]
-        )
+        # Initialize state as dictionary for LangGraph
+        state = {
+            "thread_id": request.thread_id,
+            "conversation": updated_conversation,
+            "current_message": user_message,
+            "needs_followup": True,
+            "info_complete": False,
+            "trip_type": "round trip",  # Always round trip
+            "node_trace": [],
+            # Initialize empty fields for LLM to populate
+            "departure_date": None,
+            "origin": None,
+            "destination": None,
+            "cabin_class": None,
+            "duration": None,
+            "followup_question": None,
+            "current_node": "llm_conversation",
+            "followup_count": 0
+        }
 
         # Run LangGraph workflow
         try:
-            result = graph.invoke(state.dict())
+            result = graph.invoke(state)
         except GraphRecursionError:
             raise HTTPException(
                 status_code=500,
@@ -123,13 +315,18 @@ async def chat_endpoint(request: ChatRequest):
             # Add assistant response to conversation history
             conversation_store.add_message(request.thread_id, "assistant", assistant_message)
             
-            return ChatResponse(
-                response_type="question",
-                message=assistant_message,
-                extracted_info=extracted_info,
-                thread_id=request.thread_id,
-                debug_trace=result.get("node_trace")
-            )
+            # Format as HTML
+            html_content = format_question_html(assistant_message, extracted_info)
+            
+            # return ChatResponse(
+            #     # response_type="question",
+            #     # message=assistant_message,
+            #     html_content=html_content,
+            #     # extracted_info=extracted_info,
+            #     # thread_id=request.thread_id,
+            #     # debug_trace=result.get("node_trace")
+            # )
+            return html_content
 
         # Build flight results if search completed
         flights = []
@@ -170,16 +367,22 @@ async def chat_endpoint(request: ChatRequest):
         
         # Add assistant response to conversation history  
         conversation_store.add_message(request.thread_id, "assistant", assistant_message)
+        
+        # Format as HTML
+        html_content = format_flights_html(flights, assistant_message)
 
-        return ChatResponse(
-            response_type="results",
-            message=assistant_message,
-            extracted_info=extracted_info,
-            flights=flights,
-            summary=result.get("summary"),
-            thread_id=request.thread_id,
-            debug_trace=result.get("node_trace")
-        )
+        # return ChatResponse(
+            # response_type="results",
+            # message=assistant_message,
+            # html_content=html_content,
+            # extracted_info=extracted_info,
+            # flights=flights,
+            # summary=result.get("summary"),
+            # thread_id=request.thread_id,
+            # debug_trace=result.get("node_trace")
+        # )
+        
+        return html_content
 
     except HTTPException:
         raise
@@ -225,16 +428,28 @@ async def test_extraction(request: ChatRequest):
         conversation_store.add_message(request.thread_id, "user", request.user_msg)
         updated_conversation = conversation_store.get_conversation(request.thread_id)
 
-        state = FlightSearchState(
-            thread_id=request.thread_id,
-            conversation=updated_conversation,
-            current_message=request.user_msg,
-            trip_type="round trip"
-        )
+        state = {
+            "thread_id": request.thread_id,
+            "conversation": updated_conversation,
+            "current_message": request.user_msg,
+            "trip_type": "round trip",
+            # Initialize empty fields
+            "departure_date": None,
+            "origin": None,
+            "destination": None,
+            "cabin_class": None,
+            "duration": None,
+            "needs_followup": True,
+            "info_complete": False,
+            "followup_question": None,
+            "current_node": "llm_conversation",
+            "followup_count": 0,
+            "node_trace": []
+        }
 
         # Test LLM conversation parsing
         from nodes import llm_conversation_node
-        result = llm_conversation_node(state.dict())
+        result = llm_conversation_node(state)
 
         return {
             "thread_id": request.thread_id,
