@@ -1,6 +1,6 @@
 from langgraph.graph import StateGraph, END
-from models import FlightSearchState
-from typing import Dict, Any
+from models import FlightSearchState, Message
+from typing import List
 
 from nodes import (
     llm_conversation_node,
@@ -72,14 +72,32 @@ def create_flight_search_graph():
     return workflow
 
 
-def initialize_state_from_thread(thread_id: str, conversation_history: list, current_message: str) -> Dict[str, Any]:
+def initialize_state_from_request(message: str, conversation_history: List[Message]):
     """
-    Initialize FlightSearchState from thread-based conversation.
+    Initialize a valid FlightSearchState with safe defaults for LLM-based processing.
     """
+    if not conversation_history:
+        conversation_history = [
+            {"role": "system", "content": (
+                "You are a helpful AI travel assistant specializing in flight bookings. "
+                "Your goal is to help users find the best flights by gathering their preferences "
+                "in a natural, conversational way. You can understand flexible date formats, "
+                "casual location names, and abbreviated terms. Always be friendly and efficient."
+            )}
+        ]
+    else:
+        # Convert Message objects to dicts if needed
+        conversation_history = [
+            msg if isinstance(msg, dict) else {"role": msg.role, "content": msg.content}
+            for msg in conversation_history
+        ]
+    
+    if message:
+        conversation_history.append({"role": "user", "content": message})
+    
     return {
-        "thread_id": thread_id,
         "conversation": conversation_history,
-        "current_message": current_message,
+        "current_message": message or "",
         "needs_followup": True,
         "info_complete": False,
         "followup_question": None,
