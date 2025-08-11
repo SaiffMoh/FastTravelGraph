@@ -5,18 +5,26 @@ import json
 import argparse
 from collections import defaultdict
 from typing import List, Dict, Any
+from bs4 import BeautifulSoup
 
 import requests
 
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
-CHAT_URL = f"{BASE_URL}/chat"
+CHAT_URL = f"{BASE_URL}/api/chat"
 HEALTH_URL = f"{BASE_URL}/health"
 RESET_URL = f"{BASE_URL}/reset"
 CLIENT_TIMEOUT = float(os.getenv("CLIENT_TIMEOUT", "120"))
 
-
 def pick_reply(question: str) -> str:
+    """Generate appropriate replies based on the assistant's questions"""
     q = (question or "").lower()
+
+    # Check for HTML content and extract text if needed
+    if "<div" in q and "</div>" in q:
+        soup = BeautifulSoup(q, 'html.parser')
+        question_text = soup.get_text()
+        q = question_text.lower()
+
     # Cities first to avoid matching "depart" in "departure city"
     if "departure city" in q or "destination city" in q or ("origin" in q and "destination" in q):
         return "Cairo to Dubai"
@@ -36,129 +44,132 @@ def pick_reply(question: str) -> str:
 
     return "Cairo to Dubai, 2025-12-20, round trip, 5 days, economy."
 
+def parse_html_response(html_content: str) -> Dict[str, Any]:
+    """Parse HTML content to extract flight information and summary"""
+    soup = BeautifulSoup(html_content, 'html.parser')
 
-def tab_row(cols: List[str]) -> str:
-    widths = [max(len(c), 10) for c in cols]
-    return " | ".join(c.ljust(w) for c, w in zip(cols, widths))
+    # Check if this is a question response or results
+    if soup.find('div', class_='question-response'):
+        question_div = soup.find('div', class_='question')
+        question = question_div.get_text(strip=True) if question_div else "No question found"
 
+        progress_div = soup.find('div', class_='progress')
+        progress_items = []
+        if progress_div:
+            progress_items = [li.get_text(strip=True) for li in progress_div.find_all('li')]
 
-def print_grouped_tables(flights: List[Dict[str, Any]]):
+        return {
+            "type": "question",
+            "question": question,
+            "progress": progress_items
+        }
+    elif soup.find('table', class_='flight-table'):
+        flights = []
+        table = soup.find('table', class_='flight-table')
+
+        for row in table.find_all('tr')[1:]:  # Skip header row
+            cols = row.find_all('td')
+            if len(cols) >= 9:
+                flight = {
+                    "outbound": {
+                        "airline_flight": cols[1].get_text(strip=True),
+                        "route_times": cols[2].get_text(strip=True),
+                        "duration_stops": cols[3].get_text(strip=True)
+                    },
+                    "return": {
+                        "airline_flight": cols[4].get_text(strip=True),
+                        "route_times": cols[5].get_text(strip=True),
+                        "duration_stops": cols[6].get_text(strip=True)
+                    },
+                    "price": cols[7].get_text(strip=True),
+                    "search_date": cols[8].get_text(strip=True)
+                }
+                flights.append(flight)
+
+        summary_div = soup.find('div', class_='summary-block')
+        summary = summary_div.get_text(strip=True) if summary_div else None
+
+        return {
+            "type": "results",
+            "flights": flights,
+            "summary": summary
+        }
+
+    return {"type": "unknown", "content": html_content}
+
+def print_flight_table(flights: List[Dict[str, Any]]):
+    """Print flights in a formatted table"""
     if not flights:
         print("No flights returned.")
         return
-    by_day: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-    for f in flights:
-        by_day[f.get('search_date') or 'Unknown'].append(f)
 
-    for day in sorted(by_day.keys()):
-        print(f"\n=== Offers for {day} ===")
-        header = [
-            "Price", "Curr", "Leg", "Airline", "Number",
-            "From", "To", "Dep", "Arr", "Dur", "Stops", "Layovers",
-        ]
-        print(tab_row(header))
-        print("-" * 120)
-        for f in by_day[day]:
-            for leg_key, leg_name in (("outbound", "Out"), ("return_leg", "Ret")):
-                leg = f.get(leg_key)
-                if not leg:
-                    continue
-                layovers = "; ".join(leg.get('layovers') or []) or "non-stop"
-                row = [
-                    str(f.get("price", "N/A")),
-                    str(f.get("currency", "USD")),
-                    leg_name,
-                    str(leg.get("airline", "N/A")),
-                    str(leg.get("flight_number", "N/A")),
-                    str(leg.get("departure_airport", "N/A")),
-                    str(leg.get("arrival_airport", "N/A")),
-                    str(leg.get("departure_time", "N/A")),
-                    str(leg.get("arrival_time", "N/A")),
-                    str(leg.get("duration", "N/A")),
-                    str(leg.get("stops", 0)),
-                    layovers,
-                ]
-                print(tab_row(row))
+    # Determine column widths
+    col_widths = {
+        "price": 10,
+        "out_airline": 15,
+        "out_route": 30,
+        "out_details": 20,
+        "ret_airline": 15,
+        "ret_route": 30,
+        "ret_details": 20,
+        "date": 12
+    }
 
-
-def print_flight_offers_table(all_offers: List[Dict[str, Any]]):
-    """Display flight offers in a formatted table"""
-    if not all_offers:
-        print("No offers available for selection")
-        return
-    
-    print("\n=== Flight Offers Available ===")
-    print(f"Total offers: {len(all_offers)} (Cheapest offer per day)")
-    
-    # Create table headers
-    headers = ["Offer ID", "Day Type", "Price", "Date", "Outbound", "Return", "Duration", "Stops"]
-    col_widths = [12, 20, 15, 12, 25, 25, 15, 10]
-    
     # Print header
-    header_row = " | ".join(h.ljust(w) for h, w in zip(headers, col_widths))
-    print(header_row)
-    print("-" * len(header_row))
-    
-    # Print each offer as a row
-    for offer in all_offers:
-        offer_id = offer.get("offer_id", "N/A")
-        day_type = offer.get("day_type", "unknown")
-        
-        # Create clear day labels
-        if day_type == "selected":
-            day_label = "🌟 SELECTED DAY"
-        else:
-            day_label = f"📅 Alternative {offer.get('date', 'N/A')}"
-        
-        price = offer.get("price", "N/A")
-        search_date = offer.get("search_date", "N/A")
-        
-        # Format outbound details
-        outbound = offer.get("outbound_details", {})
-        outbound_str = f"{outbound.get('airline', 'N/A')} {outbound.get('flight_number', 'N/A')}"
-        if outbound.get('route'):
-            outbound_str += f"\n{outbound['route']}"
-        if outbound.get('times'):
-            outbound_str += f"\n{outbound['times']}"
-        
-        # Format return details
-        return_details = offer.get("return_details")
-        return_str = "N/A"
-        if return_details:
-            return_str = f"{return_details.get('airline', 'N/A')} {return_details.get('flight_number', 'N/A')}"
-            if return_details.get('route'):
-                return_str += f"\n{return_details['route']}"
-            if return_details.get('times'):
-                return_str += f"\n{return_details['times']}"
-        
-        # Format duration and stops
-        outbound_duration = outbound.get('duration', 'N/A') if outbound else 'N/A'
-        return_duration = return_details.get('duration', 'N/A') if return_details else 'N/A'
-        duration_str = f"Out: {outbound_duration}\nRet: {return_duration}"
-        
-        outbound_stops = outbound.get('stops', 'N/A') if outbound else 'N/A'
-        return_stops = return_details.get('stops', 'N/A') if return_details else 'N/A'
-        stops_str = f"Out: {outbound_stops}\nRet: {return_stops}"
-        
-        # Create the row
-        row = [
-            offer_id.ljust(col_widths[0]),
-            day_label.ljust(col_widths[1]),
-            str(price).ljust(col_widths[2]),
-            str(search_date).ljust(col_widths[3]),
-            outbound_str.ljust(col_widths[4]),
-            return_str.ljust(col_widths[5]),
-            duration_str.ljust(col_widths[6]),
-            stops_str.ljust(col_widths[7])
-        ]
-        
-        print(" | ".join(row))
-        print("-" * len(header_row))
-    
-    print(f"\n💡 Tip: Select the offer that best fits your schedule and budget!")
+    print(tab_row([
+        "Price",
+        "Outbound Flight",
+        "Outbound Route & Times",
+        "Outbound Details",
+        "Return Flight",
+        "Return Route & Times",
+        "Return Details",
+        "Search Date"
+    ]))
 
+    print("-" * 150)
+
+    # Print each flight
+    for i, flight in enumerate(flights, 1):
+        print(tab_row([
+            flight["price"],
+            flight["outbound"]["airline_flight"],
+            flight["outbound"]["route_times"],
+            flight["outbound"]["duration_stops"],
+            flight["return"]["airline_flight"],
+            flight["return"]["route_times"],
+            flight["return"]["duration_stops"],
+            flight["search_date"]
+        ]))
+
+def tab_row(cols: List[str]) -> str:
+    """Format a row for table display with consistent column widths"""
+    widths = {
+        0: 10,  # Price
+        1: 15,  # Outbound Flight
+        2: 30,  # Outbound Route & Times
+        3: 20,  # Outbound Details
+        4: 15,  # Return Flight
+        5: 30,  # Return Route & Times
+        6: 20,  # Return Details
+        7: 12   # Search Date
+    }
+
+    # Ensure we have enough width definitions
+    for i in range(len(cols)):
+        if i not in widths:
+            widths[i] = 15  # Default width
+
+    # Format each column with appropriate width
+    formatted_cols = []
+    for i, col in enumerate(cols):
+        width = widths.get(i, 15)
+        formatted_cols.append(col.ljust(width))
+
+    return " | ".join(formatted_cols)
 
 def run_auto():
+    """Run automated test sequence"""
     # Optional: health check
     try:
         r = requests.get(HEALTH_URL, timeout=min(CLIENT_TIMEOUT, 10))
@@ -166,38 +177,58 @@ def run_auto():
     except Exception as e:
         print("Warning: health check failed:", e)
 
-    conversation_history: List[Dict[str, str]] = []
+    conversation_history = []
     user_message = "i want to travel from cairo to dubai"
+    thread_id = "test_thread_1"  # Using a fixed thread ID for testing
 
     for step in range(1, 12):
         payload = {
-            "message": user_message,
+            "thread_id": thread_id,
+            "user_msg": user_message,
             "conversation_history": conversation_history,
         }
-        resp = requests.post(CHAT_URL, json=payload, timeout=CLIENT_TIMEOUT)
-        if resp.status_code != 200:
-            print("Request failed", resp.status_code, resp.text)
-            sys.exit(1)
-        data = resp.json()
 
-        rtype = data.get("response_type")
-        trace = data.get("debug_trace") or []
-        print(f"\nStep {step} -> response_type={rtype}  nodes={trace}")
+        try:
+            resp = requests.post(CHAT_URL, json=payload, timeout=CLIENT_TIMEOUT)
+            if resp.status_code != 200:
+                print(f"Request failed: {resp.status_code} - {resp.text}")
+                sys.exit(1)
 
-        assistant_message = data.get("message", "")
-        print("Assistant:", assistant_message)
+            # Parse the HTML response
+            parsed = parse_html_response(resp.text)
 
-        # Persist the turn so server is stateful across requests
-        conversation_history.append({"role": "user", "content": user_message})
-        conversation_history.append({"role": "assistant", "content": assistant_message})
+            if parsed["type"] == "question":
+                print(f"\nStep {step} - Question received")
+                print("Assistant:", parsed["question"])
+                if parsed["progress"]:
+                    print("Progress:", ", ".join(parsed["progress"]))
 
-        if rtype == "results":
-            flights = data.get("flights", [])
-            print_grouped_tables([f for f in flights if f])
-            summary = data.get("summary")
-            if summary:
-                print("\nSummary:\n", summary)
-            print("\nDone.")
+                # Add to conversation history
+                conversation_history.append({"role": "user", "content": user_message})
+                conversation_history.append({"role": "assistant", "content": parsed["question"]})
+
+                # Generate reply
+                user_message = pick_reply(parsed["question"])
+                print("User:", user_message)
+                time.sleep(0.3)
+
+            elif parsed["type"] == "results":
+                print(f"\nStep {step} - Results received")
+                print_flight_table(parsed["flights"])
+
+                if parsed["summary"]:
+                    print("\nSummary:", parsed["summary"])
+
+                print("\nDone.")
+                return
+
+            else:
+                print(f"Unexpected response type: {parsed['type']}")
+                print("Content:", parsed.get("content", "No content"))
+                return
+
+        except Exception as e:
+            print(f"Error in step {step}: {str(e)}")
             return
         elif rtype == "selection":
             # Handle flight selection
@@ -214,83 +245,80 @@ def run_auto():
             print("Flight selection confirmed!")
             return
 
-        # Otherwise, answer the follow-up
-        user_message = pick_reply(assistant_message)
-        print("User:", user_message)
-        time.sleep(0.3)
-
     print("Reached step limit without results. Check API keys and server logs.")
 
-
 def run_interactive():
+    """Run interactive test session"""
     print("Flight Search CLI (type /quit to exit, /reset to reset conversation)")
-    # Health
+
+    # Health check
     try:
         r = requests.get(HEALTH_URL, timeout=min(CLIENT_TIMEOUT, 10))
         print("Health:", r.json())
     except Exception as e:
         print("Warning: health check failed:", e)
 
-    conversation_history: List[Dict[str, str]] = []
+    conversation_history = []
+    thread_id = "test_thread_1"  # Using a fixed thread ID for testing
+
     try:
         while True:
             user_message = input("You: ").strip()
             if not user_message:
                 continue
+
             if user_message.lower() in {"/quit", "/exit"}:
                 print("Bye!")
                 return
+
             if user_message.lower() == "/reset":
                 try:
-                    requests.post(RESET_URL, timeout=min(CLIENT_TIMEOUT, 10))
-                except Exception:
-                    pass
+                    requests.post(f"{RESET_URL}/{thread_id}", timeout=min(CLIENT_TIMEOUT, 10))
+                except Exception as e:
+                    print(f"Reset failed: {e}")
                 conversation_history.clear()
                 print("Conversation reset.")
                 continue
 
             payload = {
-                "message": user_message,
+                "thread_id": thread_id,
+                "user_msg": user_message,
                 "conversation_history": conversation_history,
             }
-            resp = requests.post(CHAT_URL, json=payload, timeout=CLIENT_TIMEOUT)
-            if resp.status_code != 200:
-                print("Request failed", resp.status_code, resp.text)
-                continue
-            data = resp.json()
 
-            # Persist the turn
-            conversation_history.append({"role": "user", "content": user_message})
-            assistant_message = data.get("message", "")
-            conversation_history.append({"role": "assistant", "content": assistant_message})
+            try:
+                resp = requests.post(CHAT_URL, json=payload, timeout=CLIENT_TIMEOUT)
+                if resp.status_code != 200:
+                    print(f"Request failed: {resp.status_code} - {resp.text}")
+                    continue
 
-            rtype = data.get("response_type")
-            trace = data.get("debug_trace") or []
-            print("Assistant:", assistant_message)
-            if trace:
-                print("Nodes:", trace)
+                # Parse the HTML response
+                parsed = parse_html_response(resp.text)
 
-            if rtype == "results":
-                flights = data.get("flights", [])
-                print_grouped_tables([f for f in flights if f])
-                summary = data.get("summary")
-                if summary:
-                    print("\nSummary:\n", summary)
-                print("(New search? continue chatting or type /reset)")
-            elif rtype == "selection":
-                # Handle flight selection
-                all_offers = data.get("all_offers", [])
-                if all_offers:
-                    print_flight_offers_table(all_offers)
-                    print("\nPlease enter the Offer ID you want to select:")
+                if parsed["type"] == "question":
+                    print("Assistant:", parsed["question"])
+                    if parsed["progress"]:
+                        print("Progress:", ", ".join(parsed["progress"]))
+
+                    # Add to conversation history
+                    conversation_history.append({"role": "user", "content": user_message})
+                    conversation_history.append({"role": "assistant", "content": parsed["question"]})
+
+                elif parsed["type"] == "results":
+                    print_flight_table(parsed["flights"])
+                    if parsed["summary"]:
+                        print("\nSummary:", parsed["summary"])
+                    print("(New search? continue chatting or type /reset)")
+
                 else:
-                    print("No offers available for selection")
-            elif rtype == "confirmation":
-                print("Flight selection confirmed!")
-                print("(New search? continue chatting or type /reset)")
+                    print(f"Unexpected response type: {parsed['type']}")
+                    print("Content:", parsed.get("content", "No content"))
+
+            except Exception as e:
+                print(f"Error: {str(e)}")
+
     except KeyboardInterrupt:
         print("\nBye!")
-
 
 def main():
     parser = argparse.ArgumentParser(description="Flight Search Chat CLI")
@@ -301,7 +329,6 @@ def main():
         run_auto()
     else:
         run_interactive()
-
 
 if __name__ == "__main__":
     main()

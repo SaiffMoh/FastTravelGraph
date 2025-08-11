@@ -479,7 +479,7 @@ def get_flight_offers_node(state: FlightSearchState) -> FlightSearchState:
                 return_date = (dep_date_dt + timedelta(days=int(state.get("duration", 0)))).strftime("%Y-%m-%d")
                 body["originDestinations"][1]["departureDateTimeRange"]["date"] = return_date
         
-        body.setdefault("searchCriteria", {}).setdefault("maxFlightOffers", 5)
+        body.setdefault("searchCriteria", {}).setdefault("maxFlightOffers", 3)
         bodies.append((query_date, body))
 
     all_results = []
@@ -630,8 +630,10 @@ def summarize_node(state: FlightSearchState) -> FlightSearchState:
             state["summary"] = "Here are your flight options:"
             state["current_node"] = "summarize"
             return state
-        
-        summary_prompt = f"""You are a helpful travel assistant. Based on the flight search results, provide a concise, friendly summary and recommendation.
+
+        summary_prompt = f"""You are a helpful travel assistant. 
+        Based on the flight search results, provide a concise, friendly summary and recommendation. 
+        Make it brief as possible. make it as strings only not markdown and don't add emojis.
 
 Search Details:
 - From: {state.get('origin', 'N/A')} ({state.get('origin_location_code', 'N/A')})
@@ -651,7 +653,7 @@ Please provide:
 3. Any helpful travel tips or considerations
 4. Mention any concerns (long layovers, very early/late flights, etc.)
 
-Keep it conversational, helpful, and limit to 2-3 paragraphs. Start with something like "Great! I found several flight options for your trip..."
+Keep it conversational, and helpful. Start with something like "Great! I found several flight options for your trip..."
 """
 
         summary_response = get_llm().invoke([HumanMessage(content=summary_prompt)])
