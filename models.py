@@ -92,6 +92,19 @@ class FlightSearchState(TypedDict, total=False):
     # Debug information
     node_trace: List[str]
 
+class HotelSearchState(TypedDict, total=False):
+    thread_id: str
+    city_code: str
+    hotel_id: list[str]
+    checkin_date:str
+    checkout_date: str
+    currency: str
+    roomQuantty: int
+    adult: int
+    summary: str
+    body: Optional[Dict[str, Any]]
+    access_token: Optional[str]
+
 # Conversation storage (in production, use Redis, PostgreSQL, etc.)
 class ConversationStore:
     def __init__(self):

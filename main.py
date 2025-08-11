@@ -51,7 +51,7 @@ def _get(obj: Any, attr: str, default: str = "N/A") -> str:
 
 def format_extracted_info_html(extracted_info: ExtractedInfo) -> str:
     """Format extracted information as HTML"""
-    html = "<div class='extracted-info'><h4>📋 Current Information:</h4><ul>"
+    html = "<div class='extracted-info'><h4>Current Information:</h4><ul>"
     
     if extracted_info.departure_date:
         html += f"<li><strong>Departure Date:</strong> {extracted_info.departure_date}</li>"
