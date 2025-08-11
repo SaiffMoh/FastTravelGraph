@@ -7,7 +7,7 @@ from typing import Dict, Any, List
 from langchain_openai import ChatOpenAI
 from langchain.schema import HumanMessage, SystemMessage
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
+from models import HotelSearchState
 from models import FlightSearchState
 from dotenv import load_dotenv
 load_dotenv()
@@ -616,7 +616,6 @@ def display_results_node(state: FlightSearchState) -> FlightSearchState:
     
     return state
 
-
 def summarize_node(state: FlightSearchState) -> FlightSearchState:
     """Generate LLM summary and recommendation."""
     try:
@@ -665,7 +664,21 @@ Keep it conversational, and helpful. Start with something like "Great! I found s
     state["current_node"] = "summarize"
     return state
 
+def selection_nodes(state: FlightSearchState):
+    ...
 
+def get_city_IDs_node(state: HotelSearchState):
+    ...
+
+def get_hotel_offers_node(state: HotelSearchState):
+    ...
+    
+def display_hotels_nodes(state: HotelSearchState):
+    ...
+    
+def summarize_hotels_node(state: HotelSearchState):
+    ...
+    
 # Legacy nodes for backward compatibility
 def analyze_conversation_node_legacy(state: FlightSearchState) -> FlightSearchState:
     """Legacy analyze conversation node - now just calls the new llm_conversation logic"""

@@ -11,6 +11,11 @@ from nodes import (
     get_flight_offers_node,
     display_results_node,
     summarize_node,
+    selection_node,
+    get_city_IDs_node,
+    get_hotel_offers_node,
+    display_hotels_nodes,
+    summarize_hotels_node
 )
 
 
@@ -43,6 +48,11 @@ def create_flight_search_graph():
     workflow.add_node("search_flights", get_flight_offers_node)
     workflow.add_node("display_results", display_results_node)
     workflow.add_node("summarize", summarize_node)
+    workflow.add_node("selection", selection_node)
+    workflow.add_node("get_city_IDs", get_city_IDs_node)
+    workflow.add_node("get_hotel_offers", get_hotel_offers_node)
+    workflow.add_node("display_hotels", display_hotels_nodes)
+    workflow.add_node("summarize_hotels", summarize_hotels_node)
 
     # Add edges
     # Start with LLM conversation to handle user input intelligently
@@ -64,7 +74,11 @@ def create_flight_search_graph():
     workflow.add_edge("get_auth", "search_flights")
     workflow.add_edge("search_flights", "display_results")
     workflow.add_edge("display_results", "summarize")
-    workflow.add_edge("summarize", END)
+    workflow.add_edge("summarize", "selection")
+    workflow.add_edge("selection", "get_hotel_offers")
+    workflow.add_edge("get_hotel_offers", "display_hotels")
+    workflow.add_edge("display_hotels", "summarize_hotels")
+    workflow.add_edge("summarize_hotels", END)
 
     # Set entry point
     workflow.set_entry_point("llm_conversation")
