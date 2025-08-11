@@ -230,20 +230,6 @@ def run_auto():
         except Exception as e:
             print(f"Error in step {step}: {str(e)}")
             return
-        elif rtype == "selection":
-            # Handle flight selection
-            all_offers = data.get("all_offers", [])
-            if all_offers:
-                print_flight_offers_table(all_offers)
-                # Auto-select the first offer for testing
-                user_message = all_offers[0]["offer_id"]
-                print(f"\nAuto-selecting: {user_message}")
-            else:
-                print("No offers available for selection")
-                return
-        elif rtype == "confirmation":
-            print("Flight selection confirmed!")
-            return
 
     print("Reached step limit without results. Check API keys and server logs.")
 
