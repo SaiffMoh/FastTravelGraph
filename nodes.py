@@ -1023,7 +1023,7 @@ def display_hotels_nodes(state: HotelSearchState) -> HotelSearchState:
     return state
 
 
-def summarize_hotels_node(state: HotelSearchState, formatted_hotel_offers) -> HotelSearchState:
+def summarize_hotels_node(state: HotelSearchState) -> HotelSearchState:
     """Generate LLM summary and recommendation."""
     try:
         (state.setdefault("node_trace", [])).append("summarize")
@@ -1032,13 +1032,25 @@ def summarize_hotels_node(state: HotelSearchState, formatted_hotel_offers) -> Ho
     
     try:
         # ========================= remove comment when integration =========================
-        # if not state.get("formatted_hotel_offers") or not os.getenv("OPENAI_API_KEY"):
-        #     state["summary"] = "Here are your hotel options:"
-        #     state["current_node"] = "summarize_hotels_node"
-        #     return state
+        if not state.get("formatted_hotel_offers") or not os.getenv("OPENAI_API_KEY"):
+            state["summary"] = "Here are your hotel options:"
+            state["current_node"] = "summarize_hotels_node"
+            return state
 
-        # add formatted_hotel_offers to state object for testing
-        state["formatted_hotel_offers"] = formatted_hotel_offers
+        # state["formatted_hotel_offers"] = [
+        #     {
+        #         "hotel_name": "JW Marriott Grosvenor House London",
+        #         "hotel_id": "MCLONGHM",
+        #         "category": "DELUXE_ROOM",
+        #         "check_in": "2025-08-21",
+        #         "check_out": "2025-08-26",
+        #         "description": "Prepay Non-refundable Non-changeable, prepay in full\nDeluxe Queen Room, 1 Queen,\n20sqm/215sqft-29sqm/312sqft, Wireless",
+        #         "total_price": 2255.4,
+        #         "currency": "GBP",
+        #         "cancellation_policy": "NON-REFUNDABLE RATE",
+        #         "payment_type": "deposit"
+        #     }
+        #     ]
 
         summary_prompt = f"""
             You are a helpful travel assistant. 
