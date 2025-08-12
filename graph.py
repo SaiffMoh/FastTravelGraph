@@ -45,7 +45,7 @@ def check_info_complete(state: FlightSearchState) -> str:
     if state.get("info_complete", False):
         return "normalize_info"
     # Otherwise, end this turn and wait for more user input
-    return "continue"
+    return "ask_followup"
 
 def check_selection_complete(state: HotelSearchState) -> str:
     """Check if flight selection is complete and ready for hotel search"""

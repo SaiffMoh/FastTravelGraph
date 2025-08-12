@@ -10,7 +10,7 @@ from models import (
     ChatRequest, ChatResponse, ExtractedInfo, FlightResult,
     conversation_store, FlightSearchState
 )
-
+import traceback
 load_dotenv()
 
 # Initialize FastAPI app
@@ -397,6 +397,7 @@ async def chat_endpoint(request: ChatRequest):
         raise
     except Exception as e:
         print(f"Error in chat endpoint: {e}")
+        traceback.print_exc()
         raise HTTPException(
             status_code=500,
             detail="Internal server error while processing request"
