@@ -1,3 +1,4 @@
+# nodes 
 import json
 import requests
 import os
@@ -43,6 +44,10 @@ def get_llm() -> ChatOpenAI:
             api_key=api_key
         )
     return _llm
+
+
+# Store last displayed flight offers per thread to support user selection in next turn
+_recent_offers_by_thread: Dict[str, List[Dict[str, Any]]] = {}
 
 
 def llm_conversation_node(state: FlightSearchState) -> FlightSearchState:
@@ -273,7 +278,7 @@ Airport code:"""
             'chicago': 'ORD', 'london': 'LHR', 'paris': 'CDG',
             'tokyo': 'NRT', 'dubai': 'DXB', 'amsterdam': 'AMS',
             'frankfurt': 'FRA', 'madrid': 'MAD', 'rome': 'FCO',
-            'barcelona': 'BCN', 'milan': 'MXP', 'zurich': 'ZUR',
+            'barcelona': 'BCN', 'milan': 'MXP', 'zurich': 'ZRH',
         }
         
         location_lower = location.lower().strip()
@@ -601,18 +606,46 @@ def display_results_node(state: FlightSearchState) -> FlightSearchState:
             return_leg = build_leg(itineraries[1]) if len(itineraries) > 1 else None
             price = flight.get("price", {})
             
+            # Extract ISO timestamps for selection-driven hotel flow
+            outbound_arrival_iso = None
+            return_departure_iso = None
+            try:
+                outbound_segments = itineraries[0].get("segments", [])
+                if outbound_segments:
+                    outbound_arrival_iso = outbound_segments[-1].get("arrival", {}).get("at")
+                if len(itineraries) > 1:
+                    return_segments = itineraries[1].get("segments", [])
+                    if return_segments:
+                        return_departure_iso = return_segments[0].get("departure", {}).get("at")
+            except Exception:
+                pass
+
             formatted.append({
                 "price": price.get("total", "N/A"),
                 "currency": price.get("currency", "USD"),
                 "search_date": flight.get("_search_date"),
                 "outbound": outbound_leg,
                 "return_leg": return_leg,
+                "outbound_arrival_at": outbound_arrival_iso,
+                "return_departure_at": return_departure_iso,
             })
 
         # Sort by price
         formatted.sort(key=lambda x: float(x["price"]) if x["price"] != "N/A" else float('inf'))
+
+        # Assign stable offer IDs based on displayed order
+        for index, offer in enumerate(formatted, start=1):
+            offer["offer_id"] = index
+
         state["formatted_results"] = formatted
         state["current_node"] = "display_results"
+
+        # Cache offers by thread for later selection step
+        try:
+            thread_id = state.get("thread_id", "") or "default"
+            _recent_offers_by_thread[thread_id] = formatted
+        except Exception:
+            pass
 
     except Exception as e:
         print(f"Error formatting results: {e}")
@@ -688,16 +721,294 @@ def generate_followup_node(state: FlightSearchState) -> FlightSearchState:
 
 # Aya
 def selection_nodes(state: FlightSearchState) -> HotelSearchState:
-    ...
+    """Ask user to choose a flight offer by ID, then map selection to hotel search state.
+
+    Behavior:
+    - If current_message contains a valid numeric selection matching an offer id,
+      extract destination city code and derive check-in/out dates from the selected offer:
+        - city_code: arrival airport of outbound leg (IATA)
+        - checkin_date: outbound arrival date (YYYY-MM-DD)
+        - checkout_date: first segment departure date of return leg (YYYY-MM-DD) if exists;
+                         otherwise, use checkin_date or derived by duration fallback
+      Then return hotel state and continue the flow.
+    - Otherwise, prompt the user to select an offer ID and stop the flow for this turn.
+    """
+    try:
+        (state.setdefault("node_trace", [])).append("selection")
+    except Exception:
+        pass
+
+    thread_id = state.get("thread_id", "") or "default"
+    
+    # Get offers from formatted_results (could be Amadeus API response or formatted display format)
+    formatted_results = state.get("formatted_results", {})
+    if isinstance(formatted_results, str):
+        # If it's a string, try to parse it as JSON
+        try:
+            formatted_results = json.loads(formatted_results)
+        except Exception:
+            formatted_results = {}
+    
+    # Check if it's the original Amadeus format or the formatted display format
+    if isinstance(formatted_results, dict) and "data" in formatted_results:
+        # Original Amadeus API response format
+        offers = formatted_results.get("data", [])
+        is_amadeus_format = True
+    else:
+        # Formatted display format (from display_results_node)
+        offers = formatted_results if isinstance(formatted_results, list) else []
+        is_amadeus_format = False
+    
+    # Fallback to cached offers if no formatted_results
+    if not offers:
+        offers = _recent_offers_by_thread.get(thread_id, [])
+        is_amadeus_format = False  # Cached offers are in formatted format
+
+    # If there are no offers to choose from, ask user to search again
+    if not offers:
+        # Return a hotel state with error message
+        return {
+            "thread_id": thread_id,
+            "needs_followup": True,
+            "followup_question": "I couldn't find flight offers to choose from. Would you like me to search again or change dates?",
+            "current_node": "selection"
+        }
+
+    # Try to parse a numeric selection from the user's current message
+    user_text = str(state.get("current_message", "")).strip()
+    selected_id: int | None = None
+    m = re.search(r"\b(\d+)\b", user_text)
+    if m:
+        try:
+            selected_id = int(m.group(1))
+        except Exception:
+            selected_id = None
+
+    # If no selection yet, ask the user
+    if not selected_id or selected_id < 1 or selected_id > len(offers):
+        # Build a concise list of IDs and basic info
+        preview_lines: List[str] = []
+        for i, offer in enumerate(offers):
+            if is_amadeus_format:
+                # Amadeus API response format
+                offer_id = offer.get("id", str(i + 1))
+                price = offer.get("price", {}).get("total", "N/A")
+                currency = offer.get("price", {}).get("currency", "")
+                
+                # Extract route info from itineraries
+                outbound_route = "N/A"
+                if offer.get("itineraries") and len(offer["itineraries"]) > 0:
+                    outbound = offer["itineraries"][0]
+                    if outbound.get("segments") and len(outbound["segments"]) > 0:
+                        dep = outbound["segments"][0].get("departure", {}).get("iataCode", "N/A")
+                        arr = outbound["segments"][0].get("arrival", {}).get("iataCode", "N/A")
+                        outbound_route = f"{dep}→{arr}"
+            else:
+                # Formatted display format
+                offer_id = offer.get("offer_id", str(i + 1))
+                price = offer.get("price", "N/A")
+                currency = offer.get("currency", "")
+                
+                # Extract route info from outbound leg
+                outbound = offer.get("outbound", {})
+                if outbound:
+                    dep = outbound.get("departure_airport", "N/A")
+                    arr = outbound.get("arrival_airport", "N/A")
+                    outbound_route = f"{dep}→{arr}"
+                else:
+                    outbound_route = "N/A"
+            
+            preview_lines.append(f"{offer_id}: {outbound_route} | {currency} {price}")
+
+        # Return hotel state asking for selection
+        return {
+            "thread_id": thread_id,
+            "needs_followup": True,
+            "followup_question": (
+                "Please enter the flight offer ID you prefer (e.g., 1 or 2).\n" +
+                "Available offers:\n" + "\n".join(preview_lines)
+            ),
+            "current_node": "selection"
+        }
+
+    # We have a selection ID; find the corresponding offer
+    selected_offer = None
+    for offer in offers:
+        if is_amadeus_format:
+            # Amadeus format uses "id"
+            if str(offer.get("id", "")) == str(selected_id):
+                selected_offer = offer
+                break
+        else:
+            # Formatted format uses "offer_id"
+            if str(offer.get("offer_id", "")) == str(selected_id):
+                selected_offer = offer
+                break
+
+    if not selected_offer:
+        # Return hotel state with error
+        return {
+            "thread_id": thread_id,
+            "needs_followup": True,
+            "followup_question": "That ID doesn't match any of the listed offers. Please choose a valid ID.",
+            "current_node": "selection"
+        }
+
+    # Create hotel search state with extracted data
+    hotel_state: HotelSearchState = {
+        "thread_id": thread_id,
+        "selected_flight": selected_id,
+        "needs_followup": False,
+        "current_node": "selection"
+    }
+
+    # Extract city code from outbound arrival airport
+    try:
+        if is_amadeus_format:
+            # Amadeus format: extract from itineraries
+            if selected_offer.get("itineraries") and len(selected_offer["itineraries"]) > 0:
+                outbound = selected_offer["itineraries"][0]
+                if outbound.get("segments") and len(outbound["segments"]) > 0:
+                    arrival_airport = outbound["segments"][0].get("arrival", {}).get("iataCode")
+                    if arrival_airport:
+                        # Get city code from dictionaries.locations if available
+                        dictionaries = formatted_results.get("dictionaries", {})
+                        locations = dictionaries.get("locations", {})
+                        if arrival_airport in locations:
+                            city_code = locations[arrival_airport].get("cityCode")
+                            if city_code:
+                                hotel_state["city_code"] = str(city_code)
+                            else:
+                                hotel_state["city_code"] = str(arrival_airport)
+                        else:
+                            hotel_state["city_code"] = str(arrival_airport)
+        else:
+            # Formatted format: extract from outbound leg
+            outbound = selected_offer.get("outbound", {})
+            if outbound:
+                arrival_airport = outbound.get("arrival_airport")
+                if arrival_airport:
+                    hotel_state["city_code"] = str(arrival_airport)
+    except Exception:
+        pass
+
+    # Extract check-in date from outbound arrival timestamp
+    checkin_date = None
+    try:
+        if is_amadeus_format:
+            # Amadeus format: extract from itineraries
+            if selected_offer.get("itineraries") and len(selected_offer["itineraries"]) > 0:
+                outbound = selected_offer["itineraries"][0]
+                if outbound.get("segments") and len(outbound["segments"]) > 0:
+                    arrival_time = outbound["segments"][0].get("arrival", {}).get("at")
+                    if arrival_time:
+                        dt = datetime.fromisoformat(arrival_time.replace("Z", "+00:00"))
+                        checkin_date = dt.strftime("%Y-%m-%d")
+        else:
+            # Formatted format: use the pre-extracted timestamp
+            outbound_arrival_iso = selected_offer.get("outbound_arrival_at")
+            if outbound_arrival_iso:
+                dt = datetime.fromisoformat(outbound_arrival_iso.replace("Z", "+00:00"))
+                checkin_date = dt.strftime("%Y-%m-%d")
+    except Exception:
+        pass
+
+    # Extract checkout date from return departure timestamp
+    checkout_date = None
+    try:
+        if is_amadeus_format:
+            # Amadeus format: extract from itineraries
+            if selected_offer.get("itineraries") and len(selected_offer["itineraries"]) > 1:
+                return_leg = selected_offer["itineraries"][1]
+                if return_leg.get("segments") and len(return_leg["segments"]) > 0:
+                    departure_time = return_leg["segments"][0].get("departure", {}).get("at")
+                    if departure_time:
+                        dt = datetime.fromisoformat(departure_time.replace("Z", "+00:00"))
+                        checkout_date = dt.strftime("%Y-%m-%d")
+        else:
+            # Formatted format: use the pre-extracted timestamp
+            return_departure_iso = selected_offer.get("return_departure_at")
+            if return_departure_iso:
+                dt = datetime.fromisoformat(return_departure_iso.replace("Z", "+00:00"))
+                checkout_date = dt.strftime("%Y-%m-%d")
+    except Exception:
+        pass
+
+    # Fallback to duration-based checkout date if not found
+    if not checkout_date and state.get("departure_date") and state.get("duration"):
+        try:
+            dep_dt = datetime.strptime(state["departure_date"], "%Y-%m-%d")
+            ret_dt = dep_dt + timedelta(days=int(state.get("duration", 0)))
+            checkout_date = ret_dt.strftime("%Y-%m-%d")
+        except Exception:
+            pass
+
+    # Finalize dates with safe fallbacks
+    if checkin_date:
+        hotel_state["checkin_date"] = checkin_date
+    elif state.get("departure_date"):
+        hotel_state["checkin_date"] = str(state["departure_date"])  # fallback
+
+    if checkout_date:
+        hotel_state["checkout_date"] = checkout_date
+    elif hotel_state.get("checkin_date"):
+        # fallback: +1 day
+        try:
+            dt_ci = datetime.strptime(hotel_state["checkin_date"], "%Y-%m-%d")
+            hotel_state["checkout_date"] = (dt_ci + timedelta(days=1)).strftime("%Y-%m-%d")
+        except Exception:
+            hotel_state["checkout_date"] = hotel_state["checkin_date"]
+
+    # Set default hotel search parameters
+    hotel_state["currency"] = "EGP"
+    hotel_state["roomQuantty"] = 1
+    hotel_state["adult"] = 1
+
+    return hotel_state
 # Rodaina & Saif
 def get_city_IDs_node(state: HotelSearchState) -> HotelSearchState:
-    ...
+    try:
+        (state.setdefault("node_trace", [])).append("get_city_IDs")
+    except Exception:
+        pass
+
+    # If downstream expects a city ID list, keep existing or wrap city_code in a list-shaped structure later.
+    # For now, just pass through. Real implementation would call a hotels API to resolve city_code to city IDs.
+    state.setdefault("needs_followup", False)
+    state.setdefault("current_node", "get_city_IDs")
+    return state
 
 def get_hotel_offers_node(state: HotelSearchState) -> HotelSearchState:
-    ...
+    try:
+        (state.setdefault("node_trace", [])).append("get_hotel_offers")
+    except Exception:
+        pass
+    # No-op placeholder. A real implementation would populate hotel offers in state.
+    state.setdefault("current_node", "get_hotel_offers")
+    return state
 # Ali
 def display_hotels_nodes(state: HotelSearchState) -> HotelSearchState:
-    ...
+    try:
+        (state.setdefault("node_trace", [])).append("display_hotels")
+    except Exception:
+        pass
+    # No hotel results to display yet; just advance the flow harmlessly.
+    state.setdefault("current_node", "display_hotels")
+    return state
     
 def summarize_hotels_node(state: HotelSearchState) -> HotelSearchState:
-    ...
+    try:
+        (state.setdefault("node_trace", [])).append("summarize_hotels")
+    except Exception:
+        pass
+    # Provide a minimal summary if hotel dates exist.
+    try:
+        city = state.get("city_code", "")
+        ci = state.get("checkin_date", "")
+        co = state.get("checkout_date", "")
+        if city and ci and co:
+            state["summary"] = f"Hotel search prepared for {city} from {ci} to {co}."
+    except Exception:
+        pass
+    state.setdefault("current_node", "summarize_hotels")
+    return state
