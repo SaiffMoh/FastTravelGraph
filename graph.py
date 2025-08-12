@@ -1,6 +1,8 @@
+# graph
 from langgraph.graph import StateGraph, END
-from models import FlightSearchState, TravelSearchState
+from models import FlightSearchState,HotelSearchState, TravelSearchState
 from typing import Dict, Any
+import re
 
 from nodes import (
     llm_conversation_node,
@@ -11,20 +13,44 @@ from nodes import (
     get_flight_offers_node,
     display_results_node,
     summarize_node,
+    generate_followup_node,
     selection_nodes,
     get_city_IDs_node,
     get_hotel_offers_node,
     display_hotels_nodes,
     summarize_hotels_node
 )
+from nodes import _recent_offers_by_thread
 
+from nodes import _recent_offers_by_thread
 
 def check_info_complete(state: FlightSearchState) -> str:
-    """Decide next step based on collected info without mutating state."""
+    """Decide next step based on collected info without mutating state.
+
+    Special case: If flights were already displayed and the user message looks like a numeric
+    selection, route to the selection node instead of re-running search.
+    """
+    try:
+        # If user typed a number, and we either have results on state OR cached offers by thread → selection
+        msg = str(state.get("current_message", ""))
+        if re.search(r"\b\d+\b", msg):
+            has_results_on_state = bool(state.get("formatted_results"))
+            thread_id = state.get("thread_id", "") or "default"
+            has_cached_offers = bool(_recent_offers_by_thread.get(thread_id))
+            if has_results_on_state or has_cached_offers:
+                return "selection_request"
+    except Exception:
+        pass
     # If we have all info, proceed to search
     if state.get("info_complete", False):
         return "normalize_info"
     # Otherwise, end this turn and wait for more user input
+    return "continue"
+
+def check_selection_complete(state: HotelSearchState) -> str:
+    """Check if flight selection is complete and ready for hotel search"""
+    if state.get("city_code") and state.get("checkin_date") and state.get("checkout_date"):
+        return "continue_hotel_search"
     return "ask_followup"
 
 
@@ -33,6 +59,13 @@ def check_api_success(state: FlightSearchState) -> str:
     if state.get("needs_followup", False):
         return "generate_followup"
     return "continue"
+
+
+def check_selection_complete(state: HotelSearchState) -> str:
+    """Check if flight selection is complete and ready for hotel search"""
+    if state.get("city_code") and state.get("checkin_date") and state.get("checkout_date"):
+        return "continue_hotel_search"
+    return "ask_followup"
 
 
 def create_flight_search_graph():
@@ -48,6 +81,7 @@ def create_flight_search_graph():
     workflow.add_node("search_flights", get_flight_offers_node)
     workflow.add_node("display_results", display_results_node)
     workflow.add_node("summarize", summarize_node)
+    workflow.add_node("generate_followup", generate_followup_node)
     workflow.add_node("selection", selection_nodes)
     workflow.add_node("get_city_IDs", get_city_IDs_node)
     workflow.add_node("get_hotel_offers", get_hotel_offers_node)
@@ -65,6 +99,7 @@ def create_flight_search_graph():
         {
             "normalize_info": "normalize_info",
             "ask_followup": END,
+            "selection_request": "selection",
         }
     )
     
@@ -74,8 +109,14 @@ def create_flight_search_graph():
     workflow.add_edge("get_auth", "search_flights")
     workflow.add_edge("search_flights", "display_results")
     workflow.add_edge("display_results", "summarize")
-    workflow.add_edge("summarize", "selection")
-    workflow.add_edge("selection", "get_city_IDs")
+    workflow.add_conditional_edges(
+        "selection",
+        check_selection_complete,
+        {
+            "continue_hotel_search": "get_city_IDs",
+            "ask_followup": END,
+        }
+    )
     workflow.add_edge("get_city_IDs", "get_hotel_offers")
     workflow.add_edge("get_hotel_offers", "display_hotels")
     workflow.add_edge("display_hotels", "summarize_hotels")
