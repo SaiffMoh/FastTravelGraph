@@ -671,20 +671,6 @@ Keep it conversational, and helpful. Start with something like "Great! I found s
     state["current_node"] = "summarize"
     return state
 
-def selection_nodes(state: FlightSearchState):
-    ...
-
-def get_city_IDs_node(state: HotelSearchState):
-    ...
-
-def get_hotel_offers_node(state: HotelSearchState):
-    ...
-    
-def display_hotels_nodes(state: HotelSearchState):
-    ...
-    
-def summarize_hotels_node(state: HotelSearchState):
-    ...
     
 # Legacy nodes for backward compatibility
 def analyze_conversation_node_legacy(state: FlightSearchState) -> FlightSearchState:
@@ -699,3 +685,107 @@ def generate_followup_node(state: FlightSearchState) -> FlightSearchState:
         pass
     state["current_node"] = "generate_followup"
     return state
+
+# Aya
+def selection_nodes(state: FlightSearchState) -> HotelSearchState:
+    ...
+# Rodaina & Saif
+def get_city_IDs_node(state: HotelSearchState) -> HotelSearchState:
+    """Get city IDs using Amadeus API for hotel search based on flight results."""
+    url = "https://test.api.amadeus.com/v1/reference-data/locations/hotels/by-city"
+    headers = {
+        "Authorization": f"Bearer {state.get('access_token', '')}",
+        "Content-Type": "application/json"
+    }
+    params = {
+        "cityCode": state.get("city_code", "")  # fallback to CAI if not set
+    }
+    if DEBUG:
+        print("[DEBUG] Getting hotels by city…")
+    
+    try: 
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        
+        hotels_data = data.get("data", [])
+        
+        hotel_ids = []
+        for hotel in hotels_data:
+            hotel_id = hotel.get("hotelId")
+            if hotel_id:
+                hotel_ids.append(hotel_id)
+
+        hotel_ids = hotel_ids[:20]  # limit to first 20
+        state["hotel_id"] = hotel_ids
+
+        if DEBUG:
+            print(f"[DEBUG] Found {len(hotel_ids)} hotels in {params['cityCode']}.")
+            print(f"[DEBUG] hotels in {params['cityCode']} are {hotel_ids}")
+
+    except Exception as e:
+        print(f"Error getting hotel IDs: {e}")
+        state["followup_question"] = "Sorry, I had trouble finding hotels in your city. Please try again later."
+        state["hotel_id"] = []
+        
+    return state
+
+
+def get_hotel_offers_node(state: HotelSearchState) -> HotelSearchState:
+    """Get hotel offers for a list of hotel IDs using Amadeus API."""
+    url = "https://test.api.amadeus.com/v3/shopping/hotel-offers"
+    headers = {
+        "Authorization": f"Bearer {state.get('access_token', '')}",
+        "Content-Type": "application/json"
+    }
+
+    hotel_ids = state.get("hotel_id", [])
+    if not hotel_ids:
+        state["followup_question"] = "No hotel IDs found to fetch offers."
+        return state
+
+    params = {
+        "hotelIds": ",".join(hotel_ids),
+        "checkInDate": state.get("check_in_date", datetime.now().strftime("%Y-%m-%d")),
+        "checkOutDate": state.get("check_out_date", (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")),
+        "currencyCode": "EGP"
+    }
+
+    if DEBUG:
+        print(f"[DEBUG] Getting hotel offers for {len(hotel_ids)} hotels…")
+
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+
+        hotels_offers = data.get("data", [])
+
+        state["hotels_offers"] = hotels_offers
+        if DEBUG:
+            print(f"[DEBUG] Retrieved {len(hotels_offers)} hotel offers for {params['hotelIds']}.")
+            print(f"[DEBUG] Retrieved {len(state['hotels_offers'])} hotel offers.")
+            for hotel in hotels_offers:
+                name = hotel['hotel']['name']
+                check_in = hotel['offers'][0]['checkInDate']
+                check_out = hotel['offers'][0]['checkOutDate']
+                total_price = hotel['offers'][0]['price']['total']
+                currency = hotel['offers'][0]['price']['currency']
+                
+                print(f"[DEBUG] {name} | {check_in} → {check_out} | {total_price} {currency}")
+
+        
+    except Exception as e:
+        print(f"Error getting hotel offers: {e}")
+        state["followup_question"] = (
+            "Sorry, I had trouble retrieving hotel offers. Please try again later."
+        )
+        state["hotels_offers"] = []
+
+    return state
+# Ali
+def display_hotels_nodes(state: HotelSearchState) -> HotelSearchState:
+    ...
+    
+def summarize_hotels_node(state: HotelSearchState) -> HotelSearchState:
+    ...

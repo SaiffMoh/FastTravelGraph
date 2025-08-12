@@ -108,6 +108,7 @@ class HotelSearchState(TypedDict, total=False):
     summary: str
     body: Optional[Dict[str, Any]]
     access_token: Optional[str]
+    hotels_offers: Optional[List[Dict[str, Any]]]
 
 
 # Conversation storage (in production, use Redis, PostgreSQL, etc.)
@@ -152,3 +153,7 @@ class ConversationStore:
 
 # Global conversation store instance
 conversation_store = ConversationStore()
+
+class TravelSearchState(FlightSearchState, HotelSearchState, total=False):
+    """Combined state for workflows involving both flights and hotels."""
+    pass
