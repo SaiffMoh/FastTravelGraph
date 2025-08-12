@@ -1,4 +1,3 @@
-# main
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import os
@@ -191,13 +190,6 @@ def format_flights_html(flights: List[Any], summary: Optional[str] = None) -> st
     if summary:
         html += f"<div class='summary-block'>{escape(str(summary))}</div>"
 
-    # Clear CTA prompting the next action (offer selection)
-    html += (
-        "<div class='summary-block' style='margin-top:10px'>"
-        "Please reply with the flight offer ID you'd like to choose (e.g., 1 or 2)."
-        "</div>"
-    )
-
     return html
 
 def format_question_html(question: str, extracted_info: ExtractedInfo) -> str:
@@ -335,51 +327,15 @@ async def chat_endpoint(request: ChatRequest):
             # Format as HTML
             html_content = format_question_html(assistant_message, extracted_info)
             
+            # return ChatResponse(
+            #     # response_type="question",
+            #     # message=assistant_message,
+            #     html_content=html_content,
+            #     # extracted_info=extracted_info,
+            #     # thread_id=request.thread_id,
+            #     # debug_trace=result.get("node_trace")
+            # )
             return html_content
-
-        # Check if we have flight selection and need to continue to hotel search
-        if result.get("selected_flight") and result.get("city_code") and result.get("checkin_date") and result.get("checkout_date"):
-            # We have flight selection data, continue with hotel search workflow
-            try:
-                # Create a new hotel search state from the flight selection result
-                hotel_state = {
-                    "thread_id": request.thread_id,
-                    "selected_flight": result.get("selected_flight"),
-                    "city_code": result.get("city_code"),
-                    "checkin_date": result.get("checkin_date"),
-                    "checkout_date": result.get("checkout_date"),
-                    "currency": result.get("currency", "EGP"),
-                    "roomQuantty": result.get("roomQuantty", 1),
-                    "adult": result.get("adult", 1),
-                    "needs_followup": False,
-                    "current_node": "get_city_IDs"
-                }
-                
-                # Continue the workflow for hotel search
-                hotel_result = graph.invoke(hotel_state)
-                
-                # If hotel search completed successfully
-                if hotel_result.get("summary"):
-                    assistant_message = hotel_result.get("summary", "Hotel search completed successfully!")
-                    conversation_store.add_message(request.thread_id, "assistant", assistant_message)
-                    
-                    # Format hotel search results
-                    html_content = f"""
-                    <div class='hotel-search-results'>
-                        <h3>Flight Selection & Hotel Search</h3>
-                        <p><strong>Selected Flight:</strong> #{result.get('selected_flight')}</p>
-                        <p><strong>Destination:</strong> {result.get('city_code')}</p>
-                        <p><strong>Check-in:</strong> {result.get('checkin_date')}</p>
-                        <p><strong>Check-out:</strong> {result.get('checkout_date')}</p>
-                        <div class='summary-block'>{assistant_message}</div>
-                    </div>
-                    """
-                    return html_content
-                
-            except Exception as e:
-                print(f"Error in hotel search continuation: {e}")
-                # Fall back to showing flight selection confirmation
-                pass
 
         # Build flight results if search completed
         flights = []
@@ -423,6 +379,17 @@ async def chat_endpoint(request: ChatRequest):
         
         # Format as HTML
         html_content = format_flights_html(flights, assistant_message)
+
+        # return ChatResponse(
+            # response_type="results",
+            # message=assistant_message,
+            # html_content=html_content,
+            # extracted_info=extracted_info,
+            # flights=flights,
+            # summary=result.get("summary"),
+            # thread_id=request.thread_id,
+            # debug_trace=result.get("node_trace")
+        # )
         
         return html_content
 
