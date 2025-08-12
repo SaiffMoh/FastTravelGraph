@@ -11,7 +11,7 @@ from nodes import (
     get_flight_offers_node,
     display_results_node,
     summarize_node,
-    selection_node,
+    selection_nodes,
     get_city_IDs_node,
     get_hotel_offers_node,
     display_hotels_nodes,
@@ -48,7 +48,7 @@ def create_flight_search_graph():
     workflow.add_node("search_flights", get_flight_offers_node)
     workflow.add_node("display_results", display_results_node)
     workflow.add_node("summarize", summarize_node)
-    workflow.add_node("selection", selection_node)
+    workflow.add_node("selection", selection_nodes)
     workflow.add_node("get_city_IDs", get_city_IDs_node)
     workflow.add_node("get_hotel_offers", get_hotel_offers_node)
     workflow.add_node("display_hotels", display_hotels_nodes)
