@@ -1,5 +1,5 @@
 from langgraph.graph import StateGraph, END
-from models import FlightSearchState
+from models import FlightSearchState, TravelSearchState
 from typing import Dict, Any
 
 from nodes import (
@@ -37,7 +37,7 @@ def check_api_success(state: FlightSearchState) -> str:
 
 def create_flight_search_graph():
     """Create the enhanced LangGraph workflow for intelligent flight search"""
-    workflow = StateGraph(FlightSearchState)
+    workflow = StateGraph(TravelSearchState)
 
     # Add nodes
     workflow.add_node("llm_conversation", llm_conversation_node)
