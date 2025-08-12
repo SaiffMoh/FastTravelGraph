@@ -671,20 +671,6 @@ Keep it conversational, and helpful. Start with something like "Great! I found s
     state["current_node"] = "summarize"
     return state
 
-def selection_nodes(state: FlightSearchState):
-    ...
-
-def get_city_IDs_node(state: HotelSearchState):
-    ...
-
-def get_hotel_offers_node(state: HotelSearchState):
-    ...
-    
-def display_hotels_nodes(state: HotelSearchState):
-    ...
-    
-def summarize_hotels_node(state: HotelSearchState):
-    ...
     
 # Legacy nodes for backward compatibility
 def analyze_conversation_node_legacy(state: FlightSearchState) -> FlightSearchState:
@@ -699,3 +685,19 @@ def generate_followup_node(state: FlightSearchState) -> FlightSearchState:
         pass
     state["current_node"] = "generate_followup"
     return state
+
+# Aya
+def selection_nodes(state: FlightSearchState) -> HotelSearchState:
+    ...
+# Rodaina & Saif
+def get_city_IDs_node(state: HotelSearchState) -> HotelSearchState:
+    ...
+
+def get_hotel_offers_node(state: HotelSearchState) -> HotelSearchState:
+    ...
+# Ali
+def display_hotels_nodes(state: HotelSearchState) -> HotelSearchState:
+    ...
+    
+def summarize_hotels_node(state: HotelSearchState) -> HotelSearchState:
+    ...
