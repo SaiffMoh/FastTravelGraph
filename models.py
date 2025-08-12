@@ -94,9 +94,11 @@ class FlightSearchState(TypedDict, total=False):
 
 class HotelSearchState(TypedDict, total=False):
     thread_id: str
+    user_message: str
+    selected_flight: int
     city_code: str
     hotel_id: list[str]
-    checkin_date:str
+    checkin_date: str
     checkout_date: str
     currency: str
     roomQuantty: int

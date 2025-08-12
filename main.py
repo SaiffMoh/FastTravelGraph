@@ -77,10 +77,19 @@ def format_flights_html(flights: List[Any], summary: Optional[str] = None) -> st
 
     style = (
         "<style>"
-        "table.flight-table{width:100%;border-collapse:collapse;font-family:Arial,Helvetica,sans-serif}"
-        "table.flight-table th, table.flight-table td{border:1px solid #ddd;padding:8px;text-align:left;}"
-        "table.flight-table th{font-weight:600}"
-        ".summary-block{margin-top:12px;padding:10px;border:1px solid #eee;font-family:Arial,Helvetica,sans-serif}"
+        "table.flight-table{width:100%;border-collapse:collapse;font-family:inherit;background:transparent;}"
+        "table.flight-table th,table.flight-table td{border:1px solid;"
+        "border-color:rgba(120,120,120,0.2);padding:6px 8px;text-align:left;}"
+        "table.flight-table th{font-weight:bold;}"
+        "@media (prefers-color-scheme:dark){"
+        "table.flight-table th,table.flight-table td{border-color:rgba(180,180,180,0.2);color:#eee;}"
+        "table.flight-table{color:#eee;}"
+        "}"
+        "@media (prefers-color-scheme:light){"
+        "table.flight-table th,table.flight-table td{border-color:rgba(120,120,120,0.2);color:#222;}"
+        "table.flight-table{color:#222;}"
+        "}"
+        ".summary-block{margin-top:12px;padding:10px;border:1px solid #eee;font-family:inherit;}"
         "</style>"
     )
 
@@ -88,7 +97,7 @@ def format_flights_html(flights: List[Any], summary: Optional[str] = None) -> st
     html = style
 
     # Table header
-    html = "<table class='flight-table'>"
+    html += "<table class='flight-table'>"
     html += (
         "<thead>"
         "<tr>"
