@@ -13,6 +13,9 @@ from dotenv import load_dotenv
 import json
 import os
 import requests
+from decimal import Decimal, InvalidOperation
+import traceback
+
 load_dotenv()
 
 # Debug flag
@@ -636,30 +639,31 @@ def summarize_node(state: FlightSearchState) -> FlightSearchState:
             state["current_node"] = "summarize"
             return state
 
-        summary_prompt = f"""You are a helpful travel assistant. 
-        Based on the flight search results, provide a concise, friendly summary and recommendation. 
-        Make it brief as possible. make it as strings only not markdown and don't add emojis.
+        summary_prompt = f"""
+            You are a helpful travel assistant. 
+            Based on the flight search results, provide a concise, friendly summary and recommendation. 
+            Make it brief as possible. make it as strings only not markdown and don't add emojis.
 
-Search Details:
-- From: {state.get('origin', 'N/A')} ({state.get('origin_location_code', 'N/A')})
-- To: {state.get('destination', 'N/A')} ({state.get('destination_location_code', 'N/A')})
-- Date: {state.get('departure_date', 'N/A')}
-- Cabin: {state.get('cabin_class', 'N/A')}
-- Duration: {state.get('duration', 'N/A')} days
+            Search Details:
+            - From: {state.get('origin', 'N/A')} ({state.get('origin_location_code', 'N/A')})
+            - To: {state.get('destination', 'N/A')} ({state.get('destination_location_code', 'N/A')})
+            - Date: {state.get('departure_date', 'N/A')}
+            - Cabin: {state.get('cabin_class', 'N/A')}
+            - Duration: {state.get('duration', 'N/A')} days
 
-Found {len(state.get('formatted_results', []))} flight options across 3 days.
+            Found {len(state.get('formatted_results', []))} flight options across 3 days.
 
-Flight Results (sorted by price):
-{json.dumps(state.get('formatted_results', [])[:3], indent=2)}
+            Flight Results (sorted by price):
+            {json.dumps(state.get('formatted_results', [])[:3], indent=2)}
 
-Please provide:
-1. A brief, enthusiastic summary of the search results
-2. Your recommendation for the best option(s) considering price, timing, and convenience
-3. Any helpful travel tips or considerations
-4. Mention any concerns (long layovers, very early/late flights, etc.)
+            Please provide:
+            1. A brief, enthusiastic summary of the search results
+            2. Your recommendation for the best option(s) considering price, timing, and convenience
+            3. Any helpful travel tips or considerations
+            4. Mention any concerns (long layovers, very early/late flights, etc.)
 
-Keep it conversational, and helpful. Start with something like "Great! I found several flight options for your trip..."
-"""
+            Keep it conversational, and helpful. Start with something like "Great! I found several flight options for your trip..."
+            """
 
         summary_response = get_llm().invoke([HumanMessage(content=summary_prompt)])
         state["summary"] = summary_response.content
@@ -689,6 +693,7 @@ def generate_followup_node(state: FlightSearchState) -> FlightSearchState:
 # Aya
 def selection_nodes(state: FlightSearchState) -> HotelSearchState:
     ...
+
 # Rodaina & Saif
 def get_city_IDs_node(state: HotelSearchState) -> HotelSearchState:
     """Get city IDs using Amadeus API for hotel search based on flight results."""
@@ -783,9 +788,296 @@ def get_hotel_offers_node(state: HotelSearchState) -> HotelSearchState:
         state["hotels_offers"] = []
 
     return state
-# Ali
+
+
 def display_hotels_nodes(state: HotelSearchState) -> HotelSearchState:
-    ...
+    """
+    Read hotel offers from state['hotels_offers'], normalize them into a list of
+    offers with desired fields, group by room category, select the cheapest
+    offer per category, print debug info, store formatted results in state and return it.
+    """
+    # Defensive fetch: state may contain dict with "data" or already a list
     
-def summarize_hotels_node(state: HotelSearchState) -> HotelSearchState:
-    ...
+    # hotels_payload = state.get("hotels_offers", {}) or {}
+    hotels_payload = {
+                        "data": [
+                            {
+                                "type": "hotel-offers",
+                                "hotel": {
+                                    "type": "hotel",
+                                    "hotelId": "MCLONGHM",
+                                    "chainCode": "MC",
+                                    "dupeId": "700031300",
+                                    "name": "JW Marriott Grosvenor House London",
+                                    "cityCode": "LON",
+                                    "latitude": 51.50988,
+                                    "longitude": -0.15509
+                                },
+                                "available": True,
+                                "offers": [
+                                    {
+                                        "id": "J2C7BZ4DKD",
+                                        "checkInDate": "2025-08-21",
+                                        "checkOutDate": "2025-08-26",
+                                        "rateCode": "RAC",
+                                        "rateFamilyEstimated": {
+                                            "code": "PRO",
+                                            "type": "P"
+                                        },
+                                        "room": {
+                                            "type": "AP7",
+                                            "typeEstimated": {
+                                                "category": "DELUXE_ROOM",
+                                                "beds": 1,
+                                                "bedType": "DOUBLE"
+                                            },
+                                            "description": {
+                                                "text": "Prepay Non-refundable Non-changeable, prepay in full\nDeluxe Queen Room, 1 Queen,\n20sqm/215sqft-29sqm/312sqft, Wireless",
+                                                "lang": "EN"
+                                            }
+                                        },
+                                        "guests": {
+                                            "adults": 1
+                                        },
+                                        "price": {
+                                            "currency": "GBP",
+                                            "base": "2148.00",
+                                            "total": "2255.40",
+                                            "variations": {
+                                                "average": {
+                                                    "base": "429.60"
+                                                },
+                                                "changes": [
+                                                    {
+                                                        "startDate": "2025-08-21",
+                                                        "endDate": "2025-08-22",
+                                                        "base": "396.00"
+                                                    },
+                                                    {
+                                                        "startDate": "2025-08-22",
+                                                        "endDate": "2025-08-24",
+                                                        "base": "500.00"
+                                                    },
+                                                    {
+                                                        "startDate": "2025-08-24",
+                                                        "endDate": "2025-08-25",
+                                                        "base": "372.00"
+                                                    },
+                                                    {
+                                                        "startDate": "2025-08-25",
+                                                        "endDate": "2025-08-26",
+                                                        "base": "380.00"
+                                                    }
+                                                ]
+                                            }
+                                        },
+                                        "policies": {
+                                            "cancellations": [
+                                                {
+                                                    "description": {
+                                                        "text": "NON-REFUNDABLE RATE"
+                                                    },
+                                                    "policyType": "CANCELLATION"
+                                                }
+                                            ],
+                                            "paymentType": "deposit",
+                                            "refundable": {
+                                                "cancellationRefund": "NON_REFUNDABLE"
+                                            }
+                                        },
+                                        "self": "https://test.api.amadeus.com/v3/shopping/hotel-offers/J2C7BZ4DKD",
+                                        "roomInformation": {
+                                            "description": "Prepay Non-refundable Non-changeable, prepay in full\nDeluxe Queen Room, 1 Queen,\n20sqm/215sqft-29sqm/312sqft, Wireless",
+                                            "type": "AP7",
+                                            "typeEstimated": {
+                                                "bedType": "DOUBLE",
+                                                "beds": 1,
+                                                "category": "DELUXE_ROOM"
+                                            }
+                                        }
+                                    }
+                                ],
+                                "self": "https://test.api.amadeus.com/v3/shopping/hotel-offers?hotelIds=MCLONGHM&checkInDate=2025-08-21&checkOutDate=2025-08-26&currency=EGP"
+                            }
+                        ],
+                        "dictionaries": {
+                            "currencyConversionLookupRates": {
+                                "GBP": {
+                                    "rate": "65.3390899999999988",
+                                    "target": "EGP",
+                                    "targetDecimalPlaces": 2
+                                }
+                            }
+                        }
+                    }
+    hotels_list = []
+
+    # hotels_payload may be like {"data": [...]}
+    if isinstance(hotels_payload, dict) and "data" in hotels_payload:
+        hotels_list = hotels_payload.get("data", []) or []
+    elif isinstance(hotels_payload, list):
+        hotels_list = hotels_payload
+    else:
+        # unknown format - make empty and return
+        print("display_hotels_nodes: hotels_offers has unexpected shape:", type(hotels_payload))
+        state["formated_hotel_offers"] = {"all": [], "cheapest_per_category": {}}
+        return state
+
+    formatted_offers = []  # all normalized offers
+
+    for hotel_entry in hotels_list:
+        hotel = hotel_entry.get("hotel", {}) if isinstance(hotel_entry, dict) else {}
+        hotel_name = hotel.get("name") or hotel.get("hotelName") or "Unknown Hotel"
+        hotel_id = hotel.get("hotelId") or hotel.get("id") or None
+
+        offers = hotel_entry.get("offers", []) if isinstance(hotel_entry, dict) else []
+        
+        if not isinstance(offers, list):
+            continue
+
+        for offer in offers:
+            try:
+                # category: try multiple locations
+                category = None
+                # prefer offer['room']['typeEstimated']['category']
+                
+                if isinstance(offer.get("room"), dict):
+                    category = offer["room"].get("typeEstimated", {}).get("category")
+                    if not category:
+                        # fallback to roomInformation
+                        category = offer.get("roomInformation", {}).get("typeEstimated", {}).get("category")
+                else:
+                    category = offer.get("roomInformation", {}).get("typeEstimated", {}).get("category")
+
+                # checkin/checkout
+                check_in = offer.get("checkInDate") or offer.get("check_in_date") or ""
+                check_out = offer.get("checkOutDate") or offer.get("check_out_date") or ""
+
+                # description
+                description = ""
+                if isinstance(offer.get("room", {}).get("description"), dict):
+                    description = offer["room"]["description"].get("text", "")
+                if (not description) and offer.get("roomInformation", {}).get("description"):
+                    description = offer["roomInformation"].get("description", "")
+
+                # price total and currency
+                price_info = offer.get("price", {}) or {}
+                currency = price_info.get("currency") or ""
+                total_raw = price_info.get("total") or price_info.get("base") or None
+
+                # try to parse price to Decimal for precision
+                total_price = None
+                if total_raw is not None:
+                    try:
+                        total_price = Decimal(str(total_raw))
+                    except (InvalidOperation, TypeError, ValueError):
+                        # fallback to float attempt
+                        try:
+                            total_price = Decimal(str(float(total_raw)))
+                        except Exception:
+                            total_price = None
+
+                # cancellation policy and payment type
+                policies = offer.get("policies", {}) or {}
+                payment_type = policies.get("paymentType") or policies.get("payment_type") or ""
+                # cancellation text - combine cancellation entries if any
+                cancel_texts = []
+                for c in policies.get("cancellations", []) or []:
+                    if isinstance(c, dict):
+                        desc = c.get("description", {})
+                        if isinstance(desc, dict):
+                            txt = desc.get("text") or ""
+                        else:
+                            txt = desc or ""
+                        if txt:
+                            cancel_texts.append(txt)
+                cancellation_policy = " | ".join(cancel_texts) if cancel_texts else policies.get("refundable", {}).get("cancellationRefund") or ""
+
+                # build normalized offer dict
+                norm_offer = {
+                    "hotel_name": hotel_name,
+                    "hotel_id": hotel_id,
+                    "category": category or "UNKNOWN_CATEGORY",
+                    "check_in": check_in,
+                    "check_out": check_out,
+                    "description": description,
+                    "total_price": float(total_price) if total_price is not None else None,
+                    "currency": currency,
+                    "cancellation_policy": cancellation_policy,
+                    "payment_type": payment_type,
+                    # keep original raw offer for later reference if needed
+                    # "raw_offer": offer
+                }
+
+                formatted_offers.append(norm_offer)
+            except Exception as e:
+                # do not stop processing if a single offer fails
+                print("display_hotels_nodes: error normalizing offer:", e)
+                continue
+
+    # Store results in state under the required name
+    state["formatted_hotel_offers"] = formatted_offers
+
+    print(json.dumps(formatted_offers, indent=2))
+
+    return state
+
+
+def summarize_hotels_node(state: HotelSearchState, formatted_hotel_offers) -> HotelSearchState:
+    """Generate LLM summary and recommendation."""
+    try:
+        (state.setdefault("node_trace", [])).append("summarize")
+    except Exception:
+        pass
+    
+    try:
+        # ========================= remove comment when integration =========================
+        # if not state.get("formatted_hotel_offers") or not os.getenv("OPENAI_API_KEY"):
+        #     state["summary"] = "Here are your hotel options:"
+        #     state["current_node"] = "summarize_hotels_node"
+        #     return state
+
+        # add formatted_hotel_offers to state object for testing
+        state["formatted_hotel_offers"] = formatted_hotel_offers
+
+        summary_prompt = f"""
+            You are a helpful travel assistant. 
+            Based on the hotel search results, provide a concise, friendly summary and recommendation. 
+            Make it brief as possible. make it as strings only not markdown and don't add emojis.
+
+            Search results:
+            {json.dumps(state.get('formatted_hotel_offers', []), indent=2)}
+
+            Found {len(state.get('formatted_hotel_offers', []))} hotel options.
+
+            Hotel Results (sorted by price):
+            {json.dumps(state.get('formatted_hotel_offers', []), indent=2)}
+
+            Please provide:
+            1. A brief, enthusiastic summary of the search results
+            2. Your recommendation for the best option(s) considering price, timing, and convenience
+            3. Any helpful travel tips or considerations
+            4. Mention any concerns (long layovers, very early/late flights, etc.)
+
+            Keep it conversational, and helpful. Start with something like "Great! I found several flight options for your trip..."
+            """
+
+        summary_response = get_llm().invoke([HumanMessage(content=summary_prompt)])
+        state["summary"] = summary_response.content
+        
+        print(summary_response.content)
+        
+    except Exception as e:
+        print(f"Error generating summary: {e}")
+        traceback.print_exc()
+
+    state["current_node"] = "summarize_hotels_node"
+    
+    return state
+
+
+if __name__ == "__main__":
+    hotels = display_hotels_nodes(state={})
+
+    summarize_hotels_node(state={}, formatted_hotel_offers=hotels)
+    # print(json.dumps(hotels, indent=2))
