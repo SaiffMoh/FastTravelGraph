@@ -50,6 +50,7 @@ class ChatResponse(BaseModel):
 # Internal state model for LangGraph - using TypedDict for better compatibility
 from typing import TypedDict
 
+
 class FlightSearchState(TypedDict, total=False):
     # Thread management
     thread_id: str
@@ -92,6 +93,7 @@ class FlightSearchState(TypedDict, total=False):
     # Debug information
     node_trace: List[str]
 
+
 class HotelSearchState(TypedDict, total=False):
     thread_id: str
     user_message: str
@@ -106,6 +108,7 @@ class HotelSearchState(TypedDict, total=False):
     summary: str
     body: Optional[Dict[str, Any]]
     access_token: Optional[str]
+
 
 # Conversation storage (in production, use Redis, PostgreSQL, etc.)
 class ConversationStore:

@@ -425,7 +425,7 @@ def get_access_token_node(state: FlightSearchState) -> FlightSearchState:
     if DEBUG:
         print("[DEBUG] Amadeus token: connecting…")
     try:
-        response = requests.post(url, headers=headers, data=data, timeout=10)
+        response = requests.post(url, headers=headers, data=data, timeout=20)
         response.raise_for_status()
         token_json = response.json()
         state["access_token"] = token_json.get("access_token")
@@ -493,7 +493,7 @@ def get_flight_offers_node(state: FlightSearchState) -> FlightSearchState:
     def fetch_for_day(day_body_tuple):
         day, body = day_body_tuple
         try:
-            resp = requests.post(base_url, headers=headers, json=body, timeout=12)
+            resp = requests.post(base_url, headers=headers, json=body, timeout=20)
             resp.raise_for_status()
             data = resp.json()
             flights = data.get("data", []) or []
