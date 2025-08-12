@@ -1,3 +1,4 @@
+# graph
 from langgraph.graph import StateGraph, END
 from models import FlightSearchState,HotelSearchState, TravelSearchState
 from typing import Dict, Any
@@ -19,6 +20,7 @@ from nodes import (
     display_hotels_nodes,
     summarize_hotels_node
 )
+from nodes import _recent_offers_by_thread
 
 from nodes import _recent_offers_by_thread
 
@@ -57,6 +59,13 @@ def check_api_success(state: FlightSearchState) -> str:
     if state.get("needs_followup", False):
         return "generate_followup"
     return "continue"
+
+
+def check_selection_complete(state: HotelSearchState) -> str:
+    """Check if flight selection is complete and ready for hotel search"""
+    if state.get("city_code") and state.get("checkin_date") and state.get("checkout_date"):
+        return "continue_hotel_search"
+    return "ask_followup"
 
 
 def create_flight_search_graph():
