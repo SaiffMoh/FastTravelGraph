@@ -659,10 +659,11 @@ def display_results_node(state: FlightSearchState) -> FlightSearchState:
     
     return state
 
-# Legacy nodes for backward compatibility
+
 def analyze_conversation_node_legacy(state: FlightSearchState) -> FlightSearchState:
     """Legacy analyze conversation node - now just calls the new llm_conversation logic"""
     return analyze_conversation_node(state)
+
 
 def generate_followup_node(state: FlightSearchState) -> FlightSearchState:
     """Generate follow-up question - mostly handled by LLM conversation node now"""
@@ -672,6 +673,7 @@ def generate_followup_node(state: FlightSearchState) -> FlightSearchState:
         pass
     state["current_node"] = "generate_followup"
     return state
+
 
 def summarize_node(state: FlightSearchState) -> FlightSearchState:
     """Generate LLM summary and recommendation."""
@@ -724,7 +726,7 @@ def summarize_node(state: FlightSearchState) -> FlightSearchState:
     state["current_node"] = "summarize"
     return state
 
-# Aya
+
 def selection_nodes(state: FlightSearchState) -> HotelSearchState:
     """Ask user to choose a flight offer by ID, then map selection to hotel search state.
 
@@ -952,7 +954,8 @@ def selection_nodes(state: FlightSearchState) -> HotelSearchState:
     hotel_state["adult"] = 1
 
     return hotel_state
-# Rodaina & Saif
+
+
 def get_city_IDs_node(state: HotelSearchState) -> HotelSearchState:
     """Get city IDs using Amadeus API for hotel search based on flight results."""
     if "access_token" not in state:
@@ -1004,7 +1007,6 @@ def get_city_IDs_node(state: HotelSearchState) -> HotelSearchState:
     return state
 
 
-# Fix 4: Update get_hotel_offers_node to use correct field names
 def get_hotel_offers_node(state: HotelSearchState) -> HotelSearchState:
     """Get hotel offers for a list of hotel IDs using Amadeus API."""
     url = "https://test.api.amadeus.com/v3/shopping/hotel-offers"
@@ -1134,12 +1136,12 @@ def display_hotels_nodes(state: Dict[str, Any]) -> Dict[str, Any]:
             cheapest_per_category[offer["category"]] = offer
 
     # Store results
-    state["formatted_hotel_offers"] = {
-        "all": formatted_offers,
-        "cheapest_per_category": cheapest_per_category,
-    }
+    state["formatted_hotel_offers"] = formatted_offers
+    
     print(json.dumps(state["formatted_hotel_offers"], indent=2))
+    
     return state
+
 
 def summarize_hotels_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Generate LLM summary and recommendation for hotel offers."""

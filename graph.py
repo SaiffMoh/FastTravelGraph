@@ -4,7 +4,7 @@ from models import FlightSearchState,HotelSearchState, TravelSearchState
 from typing import Dict, Any
 import re
 
-from nodes import (
+from utils.nodes import (
     llm_conversation_node,
     analyze_conversation_node,
     normalize_info_node,
@@ -20,9 +20,9 @@ from nodes import (
     display_hotels_nodes,
     summarize_hotels_node
 )
-from nodes import _recent_offers_by_thread
+from utils.nodes import _recent_offers_by_thread
 
-from nodes import _recent_offers_by_thread
+from utils.nodes import _recent_offers_by_thread
 
 def check_info_complete(state: FlightSearchState) -> str:
     """Decide next step based on collected info without mutating state.

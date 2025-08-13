@@ -14,7 +14,7 @@ from typing import Dict, Any
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from models import FlightSearchState, HotelSearchState
-from nodes import selection_nodes, display_results_node
+from utils.nodes import selection_nodes, display_results_node
 from graph import create_flight_search_graph
 
 def create_test_flight_offers():
