@@ -61,13 +61,6 @@ def check_api_success(state: FlightSearchState) -> str:
     return "continue"
 
 
-def check_selection_complete(state: HotelSearchState) -> str:
-    """Check if flight selection is complete and ready for hotel search"""
-    if state.get("city_code") and state.get("checkin_date") and state.get("checkout_date"):
-        return "continue_hotel_search"
-    return "ask_followup"
-
-
 def create_flight_search_graph():
     """Create the enhanced LangGraph workflow for intelligent flight search"""
     workflow = StateGraph(TravelSearchState)
