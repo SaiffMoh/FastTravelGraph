@@ -626,7 +626,7 @@ def display_results_node(state: FlightSearchState) -> FlightSearchState:
 
             formatted.append({
                 "price": price.get("total", "N/A"),
-                "currency": price.get("currency", "USD"),
+                "currency": price.get("currency", ""),
                 "search_date": flight.get("_search_date"),
                 "outbound": outbound_leg,
                 "return_leg": return_leg,
@@ -1142,9 +1142,9 @@ def display_hotels_nodes(state: Dict[str, Any]) -> Dict[str, Any]:
     return state
 
 def summarize_hotels_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Generate LLM summary and recommendation."""
+    """Generate LLM summary and recommendation for hotel offers."""
     try:
-        (state.setdefault("node_trace", [])).append("summarize")
+        (state.setdefault("node_trace", [])).append("summarize_hotels")
     except Exception:
         pass
 
@@ -1178,12 +1178,13 @@ def summarize_hotels_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """
 
     try:
-        # Use your LLM here (e.g., OpenAI, Mistral, etc.)
+        # Use OpenAI's ChatCompletion API
         summary_response = get_llm().invoke([HumanMessage(content=summary_prompt)])
         state["summary"] = summary_response.content
-        print(summary_response.content)
+        print("Generated summary:", summary_response.content)
     except Exception as e:
         print(f"Error generating summary: {e}")
+        import traceback
         traceback.print_exc()
         state["summary"] = (
             "Great! I found several hotel options for your trip. "
