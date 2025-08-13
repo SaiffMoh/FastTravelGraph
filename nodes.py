@@ -433,7 +433,7 @@ def get_access_token_node(state: FlightSearchState) -> FlightSearchState:
     if DEBUG:
         print("[DEBUG] Amadeus token: connecting…")
     try:
-        response = requests.post(url, headers=headers, data=data, timeout=20)
+        response = requests.post(url, headers=headers, data=data, timeout=100)
         response.raise_for_status()
         token_json = response.json()
         state["access_token"] = token_json.get("access_token")
@@ -501,7 +501,7 @@ def get_flight_offers_node(state: FlightSearchState) -> FlightSearchState:
     def fetch_for_day(day_body_tuple):
         day, body = day_body_tuple
         try:
-            resp = requests.post(base_url, headers=headers, json=body, timeout=20)
+            resp = requests.post(base_url, headers=headers, json=body, timeout=100)
             resp.raise_for_status()
             data = resp.json()
             flights = data.get("data", []) or []
@@ -658,6 +658,19 @@ def display_results_node(state: FlightSearchState) -> FlightSearchState:
     
     return state
 
+# Legacy nodes for backward compatibility
+def analyze_conversation_node_legacy(state: FlightSearchState) -> FlightSearchState:
+    """Legacy analyze conversation node - now just calls the new llm_conversation logic"""
+    return analyze_conversation_node(state)
+
+def generate_followup_node(state: FlightSearchState) -> FlightSearchState:
+    """Generate follow-up question - mostly handled by LLM conversation node now"""
+    try:
+        (state.setdefault("node_trace", [])).append("generate_followup")
+    except Exception:
+        pass
+    state["current_node"] = "generate_followup"
+    return state
 
 def summarize_node(state: FlightSearchState) -> FlightSearchState:
     """Generate LLM summary and recommendation."""
@@ -668,7 +681,7 @@ def summarize_node(state: FlightSearchState) -> FlightSearchState:
     
     try:
         if not state.get("formatted_results") or not os.getenv("OPENAI_API_KEY"):
-            state["summary"] = "Here are your flight options:"
+            state["summary"] = "Here are your flight options. Please select a flight by typing its number (1, 2, 3, etc.) to continue with hotel booking."
             state["current_node"] = "summarize"
             return state
 
@@ -696,6 +709,8 @@ def summarize_node(state: FlightSearchState) -> FlightSearchState:
             4. Mention any concerns (long layovers, very early/late flights, etc.)
 
             Keep it conversational, and helpful. Start with something like "Great! I found several flight options for your trip..."
+            
+            IMPORTANT: At the end, ask the user to select a flight by its number (1, 2, 3, etc.) to continue with hotel booking.
             """
 
         summary_response = get_llm().invoke([HumanMessage(content=summary_prompt)])
@@ -703,24 +718,9 @@ def summarize_node(state: FlightSearchState) -> FlightSearchState:
         
     except Exception as e:
         print(f"Error generating summary: {e}")
-        state["summary"] = "Great! I found your flight options. Here are the details:"
+        state["summary"] = "Great! I found your flight options. Here are the details. Please select a flight by typing its number (1, 2, 3, etc.) to continue with hotel booking."
     
     state["current_node"] = "summarize"
-    return state
-
-    
-# Legacy nodes for backward compatibility
-def analyze_conversation_node_legacy(state: FlightSearchState) -> FlightSearchState:
-    """Legacy analyze conversation node - now just calls the new llm_conversation logic"""
-    return analyze_conversation_node(state)
-
-def generate_followup_node(state: FlightSearchState) -> FlightSearchState:
-    """Generate follow-up question - mostly handled by LLM conversation node now"""
-    try:
-        (state.setdefault("node_trace", [])).append("generate_followup")
-    except Exception:
-        pass
-    state["current_node"] = "generate_followup"
     return state
 
 # Aya
@@ -775,7 +775,8 @@ def selection_nodes(state: FlightSearchState) -> HotelSearchState:
             "thread_id": thread_id,
             "needs_followup": True,
             "followup_question": "I couldn't find flight offers to choose from. Would you like me to search again or change dates?",
-            "current_node": "selection"
+            "current_node": "selection",
+            "access_token": state.get("access_token")  # Pass the access token
         }
 
     # Try to parse a numeric selection from the user's current message
@@ -792,10 +793,10 @@ def selection_nodes(state: FlightSearchState) -> HotelSearchState:
     if not selected_id or selected_id < 1 or selected_id > len(offers):
         # Build a concise list of IDs and basic info
         preview_lines: List[str] = []
-        for i, offer in enumerate(offers):
+        for i, offer in enumerate(offers, start=1):
             if is_amadeus_format:
                 # Amadeus API response format
-                offer_id = offer.get("id", str(i + 1))
+                offer_id = str(i)  # Use index as ID for display
                 price = offer.get("price", {}).get("total", "N/A")
                 currency = offer.get("price", {}).get("currency", "")
                 
@@ -805,11 +806,11 @@ def selection_nodes(state: FlightSearchState) -> HotelSearchState:
                     outbound = offer["itineraries"][0]
                     if outbound.get("segments") and len(outbound["segments"]) > 0:
                         dep = outbound["segments"][0].get("departure", {}).get("iataCode", "N/A")
-                        arr = outbound["segments"][0].get("arrival", {}).get("iataCode", "N/A")
+                        arr = outbound["segments"][-1].get("arrival", {}).get("iataCode", "N/A")
                         outbound_route = f"{dep}→{arr}"
             else:
                 # Formatted display format
-                offer_id = offer.get("offer_id", str(i + 1))
+                offer_id = str(offer.get("offer_id", str(i)))
                 price = offer.get("price", "N/A")
                 currency = offer.get("currency", "")
                 
@@ -822,7 +823,7 @@ def selection_nodes(state: FlightSearchState) -> HotelSearchState:
                 else:
                     outbound_route = "N/A"
             
-            preview_lines.append(f"{offer_id}: {outbound_route} | {currency} {price}")
+            preview_lines.append(f"{i}: {outbound_route} | {currency} {price}")
 
         # Return hotel state asking for selection
         return {
@@ -832,38 +833,29 @@ def selection_nodes(state: FlightSearchState) -> HotelSearchState:
                 "Please enter the flight offer ID you prefer (e.g., 1 or 2).\n" +
                 "Available offers:\n" + "\n".join(preview_lines)
             ),
-            "current_node": "selection"
+            "current_node": "selection",
+            "access_token": state.get("access_token")  # Pass the access token
         }
 
-    # We have a selection ID; find the corresponding offer
-    selected_offer = None
-    for offer in offers:
-        if is_amadeus_format:
-            # Amadeus format uses "id"
-            if str(offer.get("id", "")) == str(selected_id):
-                selected_offer = offer
-                break
-        else:
-            # Formatted format uses "offer_id"
-            if str(offer.get("offer_id", "")) == str(selected_id):
-                selected_offer = offer
-                break
-
-    if not selected_offer:
+    # We have a selection ID; find the corresponding offer (use 1-based indexing)
+    if selected_id > 0 and selected_id <= len(offers):
+        selected_offer = offers[selected_id - 1]  # Convert to 0-based index
+    else:
         # Return hotel state with error
         return {
             "thread_id": thread_id,
             "needs_followup": True,
             "followup_question": "That ID doesn't match any of the listed offers. Please choose a valid ID.",
-            "current_node": "selection"
+            "current_node": "selection",
+            "access_token": state.get("access_token")  # Pass the access token
         }
-
     # Create hotel search state with extracted data
     hotel_state: HotelSearchState = {
         "thread_id": thread_id,
         "selected_flight": selected_id,
         "needs_followup": False,
-        "current_node": "selection"
+        "current_node": "selection",
+        "access_token": state.get("access_token")  # IMPORTANT: Pass the access token
     }
 
     # Extract city code from outbound arrival airport
@@ -873,19 +865,9 @@ def selection_nodes(state: FlightSearchState) -> HotelSearchState:
             if selected_offer.get("itineraries") and len(selected_offer["itineraries"]) > 0:
                 outbound = selected_offer["itineraries"][0]
                 if outbound.get("segments") and len(outbound["segments"]) > 0:
-                    arrival_airport = outbound["segments"][0].get("arrival", {}).get("iataCode")
+                    arrival_airport = outbound["segments"][-1].get("arrival", {}).get("iataCode")
                     if arrival_airport:
-                        # Get city code from dictionaries.locations if available
-                        dictionaries = formatted_results.get("dictionaries", {})
-                        locations = dictionaries.get("locations", {})
-                        if arrival_airport in locations:
-                            city_code = locations[arrival_airport].get("cityCode")
-                            if city_code:
-                                hotel_state["city_code"] = str(city_code)
-                            else:
-                                hotel_state["city_code"] = str(arrival_airport)
-                        else:
-                            hotel_state["city_code"] = str(arrival_airport)
+                        hotel_state["city_code"] = str(arrival_airport)
         else:
             # Formatted format: extract from outbound leg
             outbound = selected_offer.get("outbound", {})
@@ -904,7 +886,7 @@ def selection_nodes(state: FlightSearchState) -> HotelSearchState:
             if selected_offer.get("itineraries") and len(selected_offer["itineraries"]) > 0:
                 outbound = selected_offer["itineraries"][0]
                 if outbound.get("segments") and len(outbound["segments"]) > 0:
-                    arrival_time = outbound["segments"][0].get("arrival", {}).get("at")
+                    arrival_time = outbound["segments"][-1].get("arrival", {}).get("at")
                     if arrival_time:
                         dt = datetime.fromisoformat(arrival_time.replace("Z", "+00:00"))
                         checkin_date = dt.strftime("%Y-%m-%d")
@@ -972,19 +954,29 @@ def selection_nodes(state: FlightSearchState) -> HotelSearchState:
 # Rodaina & Saif
 def get_city_IDs_node(state: HotelSearchState) -> HotelSearchState:
     """Get city IDs using Amadeus API for hotel search based on flight results."""
+    if "access_token" not in state:
+        state["followup_question"] = "Session expired. Please start over."
+        state["hotel_id"] = []
+        return state
+    
     url = "https://test.api.amadeus.com/v1/reference-data/locations/hotels/by-city"
     headers = {
-        "Authorization": f"Bearer {state.get('access_token', '')}",
+        "Authorization": f"Bearer {state['access_token']}",
         "Content-Type": "application/json"
     }
     params = {
-        "cityCode": state.get("city_code", "")  # fallback to CAI if not set
+        "cityCode": state.get("city_code", "")
     }
     if DEBUG:
-        print("[DEBUG] Getting hotels by city…")
+        print(f"[DEBUG] Getting hotels by city for {params['cityCode']}…")
     
     try: 
-        response = requests.get(url, headers=headers, params=params, timeout=10)
+        response = requests.get(url, headers=headers, params=params, timeout=100)
+        if response.status_code == 401:
+            # Token expired, get a new one
+            state = get_access_token_node(state)  # Refresh token
+            headers["Authorization"] = f"Bearer {state['access_token']}"
+            response = requests.get(url, headers=headers, params=params, timeout=100)
         response.raise_for_status()
         data = response.json()
         
@@ -1011,11 +1003,12 @@ def get_city_IDs_node(state: HotelSearchState) -> HotelSearchState:
     return state
 
 
+# Fix 4: Update get_hotel_offers_node to use correct field names
 def get_hotel_offers_node(state: HotelSearchState) -> HotelSearchState:
     """Get hotel offers for a list of hotel IDs using Amadeus API."""
     url = "https://test.api.amadeus.com/v3/shopping/hotel-offers"
     headers = {
-        "Authorization": f"Bearer {state.get('access_token', '')}",
+        "Authorization": f"Bearer {state['access_token']}",
         "Content-Type": "application/json"
     }
 
@@ -1026,16 +1019,17 @@ def get_hotel_offers_node(state: HotelSearchState) -> HotelSearchState:
 
     params = {
         "hotelIds": ",".join(hotel_ids),
-        "checkInDate": state.get("check_in_date", datetime.now().strftime("%Y-%m-%d")),
-        "checkOutDate": state.get("check_out_date", (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")),
+        "checkInDate": state.get("checkin_date", datetime.now().strftime("%Y-%m-%d")),
+        "checkOutDate": state.get("checkout_date", (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")),
         "currencyCode": "EGP"
     }
 
     if DEBUG:
         print(f"[DEBUG] Getting hotel offers for {len(hotel_ids)} hotels…")
+        print(f"[DEBUG] Check-in: {params['checkInDate']}, Check-out: {params['checkOutDate']}")
 
     try:
-        response = requests.get(url, headers=headers, params=params, timeout=10)
+        response = requests.get(url, headers=headers, params=params, timeout=100)
         response.raise_for_status()
         data = response.json()
 
@@ -1043,8 +1037,7 @@ def get_hotel_offers_node(state: HotelSearchState) -> HotelSearchState:
 
         state["hotels_offers"] = hotels_offers
         if DEBUG:
-            print(f"[DEBUG] Retrieved {len(hotels_offers)} hotel offers for {params['hotelIds']}.")
-            print(f"[DEBUG] Retrieved {len(state['hotels_offers'])} hotel offers.")
+            print(f"[DEBUG] Retrieved {len(hotels_offers)} hotel offers.")
             for hotel in hotels_offers:
                 name = hotel['hotel']['name']
                 check_in = hotel['offers'][0]['checkInDate']
