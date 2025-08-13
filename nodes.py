@@ -433,7 +433,7 @@ def get_access_token_node(state: FlightSearchState) -> FlightSearchState:
     if DEBUG:
         print("[DEBUG] Amadeus token: connecting…")
     try:
-        response = requests.post(url, headers=headers, data=data, timeout=20)
+        response = requests.post(url, headers=headers, data=data, timeout=100)
         response.raise_for_status()
         token_json = response.json()
         state["access_token"] = token_json.get("access_token")
@@ -454,7 +454,8 @@ def get_flight_offers_node(state: FlightSearchState) -> FlightSearchState:
         (state.setdefault("node_trace", [])).append("search_flights")
     except Exception:
         pass
-        
+    
+    
     base_url = "https://test.api.amadeus.com/v2/shopping/flight-offers"
     headers = {
         "Authorization": f"Bearer {state['access_token']}",
@@ -466,6 +467,9 @@ def get_flight_offers_node(state: FlightSearchState) -> FlightSearchState:
         state["needs_followup"] = True
         state["followup_question"] = "What date would you like to depart?"
         return state
+
+    print("================= access token in flight offers", state.get("access_token", "N/A"))
+    print("================= [access token] in flight offers", state["access_token"])
 
     try:
         start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
@@ -501,7 +505,7 @@ def get_flight_offers_node(state: FlightSearchState) -> FlightSearchState:
     def fetch_for_day(day_body_tuple):
         day, body = day_body_tuple
         try:
-            resp = requests.post(base_url, headers=headers, json=body, timeout=20)
+            resp = requests.post(base_url, headers=headers, json=body, timeout=100)
             resp.raise_for_status()
             data = resp.json()
             flights = data.get("data", []) or []
@@ -655,7 +659,12 @@ def display_results_node(state: FlightSearchState) -> FlightSearchState:
         state["formatted_results"] = []
         state["followup_question"] = "Sorry, I had trouble formatting the flight results."
         state["needs_followup"] = True
+
+    state["access_token"] = state.get("access_token", "m4 mawgoda fe display")
     
+    print("========== access token in display result", state.get('access_token', ''))
+    print("========== [access token] in display result", state['access_token'])
+
     return state
 
 
@@ -706,13 +715,20 @@ def summarize_node(state: FlightSearchState) -> FlightSearchState:
         state["summary"] = "Great! I found your flight options. Here are the details:"
     
     state["current_node"] = "summarize"
+    
+    state["access_token"] = state.get("access_token", "m4 mawgoda fe summarize")
+    
+    print("========== access token in summarize", state.get('access_token', ''))
+    print("========== [access token] in summarize", state['access_token'])
+    
     return state
 
-    
+
 # Legacy nodes for backward compatibility
 def analyze_conversation_node_legacy(state: FlightSearchState) -> FlightSearchState:
     """Legacy analyze conversation node - now just calls the new llm_conversation logic"""
     return analyze_conversation_node(state)
+
 
 def generate_followup_node(state: FlightSearchState) -> FlightSearchState:
     """Generate follow-up question - mostly handled by LLM conversation node now"""
@@ -723,7 +739,7 @@ def generate_followup_node(state: FlightSearchState) -> FlightSearchState:
     state["current_node"] = "generate_followup"
     return state
 
-# Aya
+
 def selection_nodes(state: FlightSearchState) -> HotelSearchState:
     """Ask user to choose a flight offer by ID, then map selection to hotel search state.
 
@@ -743,6 +759,8 @@ def selection_nodes(state: FlightSearchState) -> HotelSearchState:
         pass
 
     thread_id = state.get("thread_id", "") or "default"
+    print("================= access token in selection", state.get("access_token", ""))
+    # print("================= [access token] in selection", state["access_token"])
     
     # Get offers from formatted_results (could be Amadeus API response or formatted display format)
     formatted_results = state.get("formatted_results", {})
@@ -859,12 +877,17 @@ def selection_nodes(state: FlightSearchState) -> HotelSearchState:
         }
 
     # Create hotel search state with extracted data
-    hotel_state: HotelSearchState = {
+    hotel_state = dict(state)  # copy all existing keys
+    hotel_state.update({
         "thread_id": thread_id,
         "selected_flight": selected_id,
         "needs_followup": False,
-        "current_node": "selection"
-    }
+        "current_node": "selection",
+        "access_token": state.get("access_token")
+    })
+
+    # print("========== hotel state in selection", hotel_state)
+    # print("========== state in selection", state)
 
     # Extract city code from outbound arrival airport
     try:
@@ -895,6 +918,7 @@ def selection_nodes(state: FlightSearchState) -> HotelSearchState:
                     hotel_state["city_code"] = str(arrival_airport)
     except Exception:
         pass
+
 
     # Extract check-in date from outbound arrival timestamp
     checkin_date = None
@@ -968,15 +992,45 @@ def selection_nodes(state: FlightSearchState) -> HotelSearchState:
     hotel_state["roomQuantty"] = 1
     hotel_state["adult"] = 1
 
+    if DEBUG:
+        print(f"[DEBUG] Selected flight ID: {selected_id}")
+
     return hotel_state
+
 # Rodaina & Saif
 def get_city_IDs_node(state: HotelSearchState) -> HotelSearchState:
     """Get city IDs using Amadeus API for hotel search based on flight results."""
+    
+    try:
+        (state.setdefault("node_trace", [])).append("get_auth")
+    except Exception:
+        pass
+        
+    url = "https://test.api.amadeus.com/v1/security/oauth2/token"
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    data = {
+        "grant_type": "client_credentials",
+        "client_id": os.getenv("AMADEUS_CLIENT_ID"),
+        "client_secret": os.getenv("AMADEUS_CLIENT_SECRET")
+    }
+
+    if DEBUG:
+        print("[DEBUG] Amadeus token: connecting…")
+
+    response = requests.post(url, headers=headers, data=data, timeout=100)
+    response.raise_for_status()
+    token_json = response.json()
+    access_token = token_json.get("access_token")
+        
+    
     url = "https://test.api.amadeus.com/v1/reference-data/locations/hotels/by-city"
     headers = {
-        "Authorization": f"Bearer {state.get('access_token', '')}",
+        "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json"
     }
+    print("========== access token in city id", access_token)
+    print("========== [access token] in city id", access_token)
+
     params = {
         "cityCode": state.get("city_code", "")  # fallback to CAI if not set
     }
@@ -984,7 +1038,7 @@ def get_city_IDs_node(state: HotelSearchState) -> HotelSearchState:
         print("[DEBUG] Getting hotels by city…")
     
     try: 
-        response = requests.get(url, headers=headers, params=params, timeout=10)
+        response = requests.get(url, headers=headers, params=params, timeout=100)
         response.raise_for_status()
         data = response.json()
         
@@ -1035,7 +1089,7 @@ def get_hotel_offers_node(state: HotelSearchState) -> HotelSearchState:
         print(f"[DEBUG] Getting hotel offers for {len(hotel_ids)} hotels…")
 
     try:
-        response = requests.get(url, headers=headers, params=params, timeout=10)
+        response = requests.get(url, headers=headers, params=params, timeout=100)
         response.raise_for_status()
         data = response.json()
 
@@ -1073,118 +1127,7 @@ def display_hotels_nodes(state: HotelSearchState) -> HotelSearchState:
     """
     # Defensive fetch: state may contain dict with "data" or already a list
     
-    # hotels_payload = state.get("hotels_offers", {}) or {}
-    hotels_payload = {
-                        "data": [
-                            {
-                                "type": "hotel-offers",
-                                "hotel": {
-                                    "type": "hotel",
-                                    "hotelId": "MCLONGHM",
-                                    "chainCode": "MC",
-                                    "dupeId": "700031300",
-                                    "name": "JW Marriott Grosvenor House London",
-                                    "cityCode": "LON",
-                                    "latitude": 51.50988,
-                                    "longitude": -0.15509
-                                },
-                                "available": True,
-                                "offers": [
-                                    {
-                                        "id": "J2C7BZ4DKD",
-                                        "checkInDate": "2025-08-21",
-                                        "checkOutDate": "2025-08-26",
-                                        "rateCode": "RAC",
-                                        "rateFamilyEstimated": {
-                                            "code": "PRO",
-                                            "type": "P"
-                                        },
-                                        "room": {
-                                            "type": "AP7",
-                                            "typeEstimated": {
-                                                "category": "DELUXE_ROOM",
-                                                "beds": 1,
-                                                "bedType": "DOUBLE"
-                                            },
-                                            "description": {
-                                                "text": "Prepay Non-refundable Non-changeable, prepay in full\nDeluxe Queen Room, 1 Queen,\n20sqm/215sqft-29sqm/312sqft, Wireless",
-                                                "lang": "EN"
-                                            }
-                                        },
-                                        "guests": {
-                                            "adults": 1
-                                        },
-                                        "price": {
-                                            "currency": "GBP",
-                                            "base": "2148.00",
-                                            "total": "2255.40",
-                                            "variations": {
-                                                "average": {
-                                                    "base": "429.60"
-                                                },
-                                                "changes": [
-                                                    {
-                                                        "startDate": "2025-08-21",
-                                                        "endDate": "2025-08-22",
-                                                        "base": "396.00"
-                                                    },
-                                                    {
-                                                        "startDate": "2025-08-22",
-                                                        "endDate": "2025-08-24",
-                                                        "base": "500.00"
-                                                    },
-                                                    {
-                                                        "startDate": "2025-08-24",
-                                                        "endDate": "2025-08-25",
-                                                        "base": "372.00"
-                                                    },
-                                                    {
-                                                        "startDate": "2025-08-25",
-                                                        "endDate": "2025-08-26",
-                                                        "base": "380.00"
-                                                    }
-                                                ]
-                                            }
-                                        },
-                                        "policies": {
-                                            "cancellations": [
-                                                {
-                                                    "description": {
-                                                        "text": "NON-REFUNDABLE RATE"
-                                                    },
-                                                    "policyType": "CANCELLATION"
-                                                }
-                                            ],
-                                            "paymentType": "deposit",
-                                            "refundable": {
-                                                "cancellationRefund": "NON_REFUNDABLE"
-                                            }
-                                        },
-                                        "self": "https://test.api.amadeus.com/v3/shopping/hotel-offers/J2C7BZ4DKD",
-                                        "roomInformation": {
-                                            "description": "Prepay Non-refundable Non-changeable, prepay in full\nDeluxe Queen Room, 1 Queen,\n20sqm/215sqft-29sqm/312sqft, Wireless",
-                                            "type": "AP7",
-                                            "typeEstimated": {
-                                                "bedType": "DOUBLE",
-                                                "beds": 1,
-                                                "category": "DELUXE_ROOM"
-                                            }
-                                        }
-                                    }
-                                ],
-                                "self": "https://test.api.amadeus.com/v3/shopping/hotel-offers?hotelIds=MCLONGHM&checkInDate=2025-08-21&checkOutDate=2025-08-26&currency=EGP"
-                            }
-                        ],
-                        "dictionaries": {
-                            "currencyConversionLookupRates": {
-                                "GBP": {
-                                    "rate": "65.3390899999999988",
-                                    "target": "EGP",
-                                    "targetDecimalPlaces": 2
-                                }
-                            }
-                        }
-                    }
+    hotels_payload = state.get("hotels_offers", {}) or {}
     hotels_list = []
 
     # hotels_payload may be like {"data": [...]}
@@ -1194,7 +1137,7 @@ def display_hotels_nodes(state: HotelSearchState) -> HotelSearchState:
         hotels_list = hotels_payload
     else:
         # unknown format - make empty and return
-        print("display_hotels_nodes: hotels_offers has unexpected shape:", type(hotels_payload))
+        # print("display_hotels_nodes: hotels_offers has unexpected shape:", type(hotels_payload))
         state["formated_hotel_offers"] = {"all": [], "cheapest_per_category": {}}
         return state
 

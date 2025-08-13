@@ -107,7 +107,7 @@ class HotelSearchState(TypedDict, total=False):
     adult: int
     summary: str
     body: Optional[Dict[str, Any]]
-    access_token: Optional[str]
+    access_token: str
     hotels_offers: Optional[List[Dict[str, Any]]]
 
 
